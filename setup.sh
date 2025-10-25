@@ -15,9 +15,9 @@ TORCHAUDIO_VERSION="2.1.2"
 TORCH_INDEX_URL="https://download.pytorch.org/whl/cu121"
 
 if [[ "${PYTHON_VERSION}" == "3.12" ]] || [[ "${PYTHON_VERSION}" == "3.11" ]] || [[ "${PYTHON_VERSION}" == "3.10" ]]; then
-    TORCH_VERSION="2.4.0"  # Совпадение с RunPod-образом
-    TORCHVISION_VERSION="0.19.0"
-    TORCHAUDIO_VERSION="2.4.0"
+    TORCH_VERSION="2.6.0"  # Обновлено для совместимости с axolotl и flash-attn
+    TORCHVISION_VERSION="0.21.0"
+    TORCHAUDIO_VERSION="2.6.0"
     TORCH_INDEX_URL="https://download.pytorch.org/whl/cu124"
 fi
 
@@ -58,15 +58,14 @@ else
         "torchaudio==${TORCHAUDIO_VERSION}"
 fi
 
-echo ">>> Установка mergekit без автоматической установки зависимостей..."
-# mergekit 0.0.6 жестко требует accelerate~=1.3.0, что совпадает с требованиями
-# инструмента mergekit-yaml. Чтобы предотвратить конфликты, управляем версиями вручную.
-pip install --upgrade --no-deps --root-user-action=ignore "mergekit[hf]"
+echo ">>> Установка Axolotl (первым, чтобы он потянул правильные зависимости)..."
+pip install --upgrade --root-user-action=ignore "axolotl[flash-attn,deepspeed]"
+
+echo ">>> Установка mergekit с GitHub (свежая версия, без устаревших зависимостей)..."
+pip install --upgrade --no-deps --root-user-action=ignore git+https://github.com/arcee-ai/mergekit.git#egg=mergekit[hf]
 
 echo ">>> Установка зависимостей mergekit с фиксированными версиями..."
-# Устанавливаем все обязательные зависимости mergekit, кроме accelerate. Так мы
-# удовлетворяем требованиям mergekit (click, immutables, safetensors~=0.5.2 и т.д.) и
-# одновременно сохраняем актуальную версию accelerate, необходимую Axolotl.
+# Устанавливаем зависимости mergekit, кроме accelerate (пусть axolotl управляет версией)
 MERGEKIT_DEPS=(
     "click==8.1.8"
     "immutables==0.20"
@@ -83,11 +82,7 @@ MERGEKIT_DEPS=(
 )
 pip install --upgrade --root-user-action=ignore "${MERGEKIT_DEPS[@]}"
 
-echo ">>> Установка Axolotl..."
-pip install --upgrade --root-user-action=ignore "axolotl[flash-attn,deepspeed]"
-
-echo ">>> Фиксация accelerate в диапазоне, совместимом с mergekit..."
-pip install --upgrade --root-user-action=ignore "accelerate>=0.27.0,<0.29.0"  # Совместимо с axolotl и mergekit
+# Удалена фиксация accelerate — pip разрешит конфликты автоматически
 
 echo ">>> Установка huggingface_hub CLI..."
 pip install --upgrade --root-user-action=ignore "huggingface_hub[cli]"
