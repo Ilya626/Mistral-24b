@@ -29,6 +29,15 @@ git clone https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/${HF_USERNAME}/${NEW
 cp -r /workspace/final_model/* /workspace/hf_repo/
 echo ">>> Артефакты успешно скопированы в локальный репозиторий."
 
+echo ">>> Быстрая проверка модели на сэмплах grandmaster2..."
+python3 /workspace/Mistral-24b/scripts/evaluate_prompts.py \
+    --model /workspace/final_model \
+    --dataset grandmaster2 \
+    --dataset-split "train[:8]" \
+    --max-samples 8 \
+    --output-dir /workspace/evaluation_logs || \
+    echo ">>> Предупреждение: оценка не выполнена (см. сообщение выше)."
+
 echo ">>> Шаг 3/3: Отправка файлов (может быть долго)..."
 cd /workspace/hf_repo
 git config user.name "${HF_USERNAME}"
