@@ -20,7 +20,22 @@ rm -rf /workspace/final_model
 cd /workspace
 
 echo ">>> Шаг 1/3: Впекание LoRA-адаптера в модель..."
-mergekit-hf merge /workspace/merged_model /workspace/merged_model_lora /workspace/final_model --cuda
+python3 /workspace/Mistral-24b/scripts/apply_lora.py \
+    --base-model /workspace/merged_model \
+    --lora-adapter /workspace/merged_model_lora \
+    --output-dir /workspace/final_model \
+    --dtype auto \
+    --device auto
+
+if [ ! -f "/workspace/final_model/config.json" ]; then
+    echo "Ошибка: В /workspace/final_model отсутствует config.json. Впекание не удалось."
+    exit 1
+fi
+
+if [ ! -f "/workspace/final_model/tokenizer.json" ] && [ ! -f "/workspace/final_model/tokenizer.model" ]; then
+    echo "Ошибка: В /workspace/final_model отсутствуют файлы токенизатора. Впекание не удалось."
+    exit 1
+fi
 
 echo ">>> Шаг 2/3: Подготовка и загрузка на Hugging Face Hub..."
 huggingface-cli repo create ${NEW_MODEL_NAME} --type model --exist-ok
