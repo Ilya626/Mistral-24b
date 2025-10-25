@@ -34,14 +34,21 @@ else
         --index-url "${TORCH_INDEX_URL}"
 fi
 
-echo ">>> Установка mergekit и фиксация совместимой версии accelerate..."
-pip install --upgrade "mergekit[hf]" "accelerate>=1.3.0,<1.4.0"
+echo ">>> Установка mergekit без даунгрейда accelerate..."
+# mergekit 0.0.6 жестко требует accelerate~=1.3.0. Это противоречит требованиям Axolotl,
+# который с версии 0.12.2 использует accelerate==1.10.0. Чтобы избежать постоянного
+# переустановления и конфликтов, ставим mergekit без зависимостей и управляем версией
+# accelerate вручную.
+pip install --upgrade --no-deps "mergekit[hf]"
+# Отсутствующие зависимости mergekit (transformers, sentencepiece, safetensors и т.д.)
+# ставим отдельно, чтобы не притянуть старую версию accelerate.
+pip install --upgrade "transformers" "sentencepiece" "safetensors" "hf_transfer" "einops"
 
 echo ">>> Установка Axolotl..."
 pip install --upgrade "axolotl[flash-attn,deepspeed]"
 
-echo ">>> Переустановка accelerate на совместимую версию (если была обновлена)..."
-pip install --upgrade "accelerate>=1.3.0,<1.4.0"
+echo ">>> Фиксация accelerate на версии 1.10.0 для совместимости с Axolotl и TRL..."
+pip install --upgrade "accelerate==1.10.0"
 
 echo ">>> Установка huggingface_hub CLI..."
 pip install --upgrade "huggingface_hub[cli]"
