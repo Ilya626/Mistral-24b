@@ -74,7 +74,8 @@ MERGEKIT_DEPS=(
     "datasets"
     "peft"
     "protobuf"
-    "pydantic"
+    # mergekit пока не совместим с Pydantic v2 (см. ошибка schema-for-unknown-type)
+    "pydantic<2"
     "scipy"
     "safetensors>=0.5.2,<0.6.0"  # Единственный жёсткий пин, чтобы не сломать
     "transformers"
