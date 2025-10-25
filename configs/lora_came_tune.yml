@@ -1,13 +1,27 @@
+# --- Базовая модель и токенизатор ---
+# Указываем на нашу "сырую" модель после слияния.
+# Axolotl автоматически подхватит из нее токенизатор, который знает
+# специальные токены Llama 3, такие как <|start_header_id|>.
 base_model: /workspace/merged_model
 model_type: LlamaForCausalLM
 tokenizer_type: LlamaTokenizer
 
+# --- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: ПРИНУДИТЕЛЬНАЯ ШАБЛОНИЗАЦИЯ ---
+# Мы явно указываем Axolotl использовать шаблон Llama 3 Instruct.
+# Он будет автоматически переформатировать все данные из датасета
+# в этот формат перед подачей в модель.
+chat_template: llama-3
+
+# --- Настройки датасета ---
+# Датасет для "полировки" и обучения новому шаблону
 datasets:
   - path: Vikhrmodels/GrandMaster2
     type: alpaca
 val_set_size: 0.01
 dataset_prepared_path: /workspace/last_run_prepared
 
+# --- Настройки дообучения LoRA ---
+# Эти параметры остаются неизменными
 adapter: lora
 lora_r: 16
 lora_alpha: 32
@@ -21,16 +35,19 @@ lora_target_modules:
   - down_proj
   - up_proj
 
+# --- Параметры тренировки ---
 sequence_len: 2048
 sample_packing: true
 load_in_4bit: true
-bf16: true
+bf16: true # Обязательно для CAME
 
 gradient_accumulation_steps: 2
 micro_batch_size: 1
-num_epochs: 1
+num_epochs: 1 # Всего один прогон для "полировки"
 lr_scheduler: "cosine"
 
+# --- Секция продвинутого оптимизатора CAME ---
+# Используем CAME для аккуратного дообучения без "забывания"
 optimizer: came
 came_learning_rate: 5e-5
 came_beta1: 0.9
@@ -39,5 +56,6 @@ came_beta3: 0.999
 came_eps: 1e-8
 came_weight_decay: 0.01
 
+# --- Сохранение ---
 output_dir: /workspace/merged_model_lora
-save_steps: 500
+save_steps: 500 # Сохраняем прогресс на всякий случай
