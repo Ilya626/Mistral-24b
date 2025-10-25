@@ -40,9 +40,26 @@ echo ">>> Установка mergekit без даунгрейда accelerate..."
 # переустановления и конфликтов, ставим mergekit без зависимостей и управляем версией
 # accelerate вручную.
 pip install --upgrade --no-deps "mergekit[hf]"
-# Отсутствующие зависимости mergekit (transformers, sentencepiece, safetensors и т.д.)
-# ставим отдельно, чтобы не притянуть старую версию accelerate.
-pip install --upgrade "transformers" "sentencepiece" "safetensors" "hf_transfer" "einops"
+
+echo ">>> Установка зависимостей mergekit с фиксированными версиями..."
+# Устанавливаем все обязательные зависимости mergekit, кроме accelerate. Так мы
+# удовлетворяем требованиям mergekit (click, immutables, safetensors~=0.5.2 и т.д.) и
+# одновременно сохраняем актуальную версию accelerate, необходимую Axolotl.
+MERGEKIT_DEPS=(
+    "click==8.1.8"
+    "immutables==0.20"
+    "datasets"
+    "peft"
+    "protobuf"
+    "pydantic>=2.10.6,<2.11"
+    "scipy"
+    "safetensors>=0.5.2,<0.6.0"
+    "transformers"
+    "sentencepiece"
+    "hf_transfer"
+    "einops"
+)
+pip install --upgrade "${MERGEKIT_DEPS[@]}"
 
 echo ">>> Установка Axolotl..."
 pip install --upgrade "axolotl[flash-attn,deepspeed]"
