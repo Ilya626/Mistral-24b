@@ -15,9 +15,9 @@ TORCHAUDIO_VERSION="2.1.2"
 TORCH_INDEX_URL="https://download.pytorch.org/whl/cu121"
 
 if [[ "${PYTHON_VERSION}" == "3.12" ]] || [[ "${PYTHON_VERSION}" == "3.11" ]] || [[ "${PYTHON_VERSION}" == "3.10" ]]; then
-    TORCH_VERSION="2.4.1"
-    TORCHVISION_VERSION="0.19.1"
-    TORCHAUDIO_VERSION="2.4.1"
+    TORCH_VERSION="2.4.0"  # Изменено на 2.4.0 для совпадения с RunPod-образом
+    TORCHVISION_VERSION="0.19.0"
+    TORCHAUDIO_VERSION="2.4.0"
     TORCH_INDEX_URL="https://download.pytorch.org/whl/cu124"
 fi
 
@@ -55,7 +55,7 @@ else
         --index-url "${TORCH_INDEX_URL}" \
         "torch==${TORCH_VERSION}" \
         "torchvision==${TORCHVISION_VERSION}" \
-        "torchaudio==${TORCHAUDIO_VERSION}"
+        "torchaudio==${TORCH_AUDIO_VERSION}"
 fi
 
 echo ">>> Установка mergekit без автоматической установки зависимостей..."
@@ -87,7 +87,7 @@ echo ">>> Установка Axolotl..."
 pip install --upgrade "axolotl[flash-attn,deepspeed]"
 
 echo ">>> Фиксация accelerate в диапазоне, совместимом с mergekit..."
-pip install --upgrade "accelerate>=1.3,<1.4"
+pip install --upgrade "accelerate>=0.27.0,<0.29.0"  # Совместимо с axolotl и mergekit
 
 echo ">>> Установка huggingface_hub CLI..."
 pip install --upgrade "huggingface_hub[cli]"
