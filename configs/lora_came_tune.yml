@@ -1,0 +1,43 @@
+base_model: /workspace/merged_model
+model_type: LlamaForCausalLM
+tokenizer_type: LlamaTokenizer
+
+datasets:
+  - path: Vikhrmodels/GrandMaster2
+    type: alpaca
+val_set_size: 0.01
+dataset_prepared_path: /workspace/last_run_prepared
+
+adapter: lora
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+lora_target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - down_proj
+  - up_proj
+
+sequence_len: 2048
+sample_packing: true
+load_in_4bit: true
+bf16: true
+
+gradient_accumulation_steps: 2
+micro_batch_size: 1
+num_epochs: 1
+lr_scheduler: "cosine"
+
+optimizer: came
+came_learning_rate: 5e-5
+came_beta1: 0.9
+came_beta2: 0.999
+came_beta3: 0.999
+came_eps: 1e-8
+came_weight_decay: 0.01
+
+output_dir: /workspace/merged_model_lora
+save_steps: 500

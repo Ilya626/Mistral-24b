@@ -1,0 +1,35 @@
+base_model: /workspace/Vistral-24B-Instruct
+dtype: bfloat16
+merge_method: passthrough
+slices:
+  # Часть 1: "Хирургия" для словаря (метод SLERP)
+  - sources:
+      - model: /workspace/Vistral-24B-Instruct
+        tensor_slice:
+      - model: /workspace/Cydonia-24B-v3.1
+        tensor_slice:
+    destinations:
+      - model.embed_tokens.weight
+      - lm_head.weight
+    merge_method: slerp
+    weight: 0.5
+  - sources:
+      - model: /workspace/Vistral-24B-Instruct
+        tensor_slice:
+    destinations:
+      - model.embed_tokens.weight
+      - lm_head.weight
+      
+  # Часть 2: Сложение "умений" для тела модели (метод DARE TIES)
+  - sources:
+      - model: /workspace/Vistral-24B-Instruct
+        base_model: /workspace/Mistral-Small-3.1-24B-Base-2503
+      - model: /workspace/Cydonia-24B-v3.1
+        base_model: /workspace/Mistral-Small-3.1-24B-Base-2503
+    exclude:
+      - model.embed_tokens.weight
+      - lm_head.weight
+    merge_method: dare_ties
+    parameters:
+      density: 0.5
+      weight: 1.0
