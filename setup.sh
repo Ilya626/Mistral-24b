@@ -63,27 +63,34 @@ fi
 echo ">>> Установка Axolotl и автоматическое разрешение зависимостей..."
 pip install --upgrade --root-user-action=ignore "axolotl[flash-attn,deepspeed]"
 
+# Удаляем modal: конфликтует с требованием click==8.2.1 у mergekit
+pip uninstall -y modal || true
+
 # Установка mergekit с GitHub (свежая версия) без deps, затем его зависимости — pip разрешит
 echo ">>> Установка mergekit без deps..."
 pip install --upgrade --no-deps --root-user-action=ignore git+https://github.com/arcee-ai/mergekit.git#egg=mergekit[hf]
 
 echo ">>> Установка зависимостей mergekit (pip разрешит версии автоматически)..."
 MERGEKIT_DEPS=(
-    "click"
+    "accelerate>=1.6.0,<1.7.0"
+    "click==8.2.1"
     "immutables"
-    "datasets"
+    "datasets==4.0.0"
     "peft"
     "protobuf"
-    # mergekit пока не совместим с Pydantic v2 (см. ошибка schema-for-unknown-type)
-    "pydantic<2"
+    # mergekit и axolotl требуют Pydantic 2.10.6
+    "pydantic==2.10.6"
     "scipy"
-    "safetensors>=0.5.2,<0.6.0"  # Единственный жёсткий пин, чтобы не сломать
+    "safetensors==0.5.2"
     "transformers"
     "sentencepiece"
     "hf_transfer"
     "einops"
 )
 pip install --upgrade --root-user-action=ignore "${MERGEKIT_DEPS[@]}"
+
+# Доп. зависимости окружения
+pip install --upgrade --root-user-action=ignore pycairo
 
 # Установка huggingface_hub CLI
 echo ">>> Установка huggingface_hub CLI..."
