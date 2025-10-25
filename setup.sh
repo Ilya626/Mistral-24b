@@ -63,31 +63,39 @@ fi
 echo ">>> Удаление повреждённой установки transformers..."
 pip uninstall -y transformers tokenizers || true
 
-# Установка axolotl с GitHub (свежая версия, чтобы избежать устаревших точных пинов с PyPI)
-echo ">>> Установка Axolotl с GitHub и автоматическое разрешение зависимостей..."
-pip install --upgrade --root-user-action=ignore git+https://github.com/axolotl-ai-cloud/axolotl.git#egg=axolotl[flash-attn,deepspeed]
 
-# Установка mergekit с GitHub (свежая версия)
+# Удаляем modal: конфликтует с требованием click==8.2.1 у mergekit
+pip uninstall -y modal || true
+
+# Установка mergekit с GitHub (свежая версия) без deps, затем его зависимости — pip разрешит
+
 echo ">>> Установка mergekit без deps..."
 pip install --upgrade --no-deps --root-user-action=ignore git+https://github.com/arcee-ai/mergekit.git#egg=mergekit[hf]
 
 # Установка зависимостей mergekit (pip разрешит версии автоматически, совместимо с axolotl)
 echo ">>> Установка зависимостей mergekit..."
 MERGEKIT_DEPS=(
-    "click"
+    "accelerate>=1.6.0,<1.7.0"
+    "click==8.2.1"
     "immutables"
-    "datasets"
+    "datasets==4.0.0"
     "peft"
     "protobuf"
-    "pydantic"
+    # mergekit и axolotl требуют Pydantic 2.10.6
+    "pydantic==2.10.6"
     "scipy"
-    "safetensors>=0.4.2"  # Обновлённый пин из актуальных требований mergekit
+
+    "safetensors==0.5.2"
+
     "transformers"
     "sentencepiece"
     "hf_transfer"
     "einops"
 )
 pip install --upgrade --root-user-action=ignore "${MERGEKIT_DEPS[@]}"
+
+# Доп. зависимости окружения
+pip install --upgrade --root-user-action=ignore pycairo
 
 # Установка huggingface_hub CLI
 echo ">>> Установка huggingface_hub CLI..."
