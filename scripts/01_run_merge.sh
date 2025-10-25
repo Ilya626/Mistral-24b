@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e # Выход при ошибке
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+MERGE_CONFIG="${REPO_ROOT}/configs/dare_hybrid_merge.yml"
+
 echo "--- ФАЗА 1: ГИБРИДНОЕ СЛИЯНИЕ МОДЕЛЕЙ ---"
 
 # Проверка переменных окружения
@@ -15,7 +20,8 @@ huggingface-cli download TheDrummer/Cydonia-24B-v3.1 --local-dir /workspace/Cydo
 huggingface-cli download mistralai/Mistral-Small-3.1-24B-Base-2503 --local-dir /workspace/Mistral-Small-3.1-24B-Base-2503 --exclude "*.bin"
 
 echo ">>> Шаг 2/2: Запуск слияния DARE TIES Hybrid..."
-mergekit-yaml ../configs/dare_hybrid_merge.yml /workspace/merged_model --cuda --copy-tokenizer --allow-crimes
+mergekit-yaml "${MERGE_CONFIG}" /workspace/merged_model --cuda --copy-tokenizer --allow-crimes
 
 echo "--- ФАЗА 1 ЗАВЕРШЕНА ---"
 echo ">>> 'Сырая' слитая модель готова в /workspace/merged_model"
+echo ">>> Фаза 1 успешно завершена."

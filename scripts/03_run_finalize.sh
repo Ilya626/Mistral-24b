@@ -4,8 +4,8 @@ set -e
 echo "--- ФАЗА 3: ФИНАЛИЗАЦИЯ И ЗАГРУЗКА НА HUGGING FACE ---"
 
 # Проверка переменных окружения
-if [ -z "$HF_TOKEN" ] || [ -z "$HF_USERNAME" ] || [ -z "$NEW_MODEL_NAME" ]; then
-    echo "Ошибка: Убедитесь, что переменные HF_TOKEN, HF_USERNAME и NEW_MODEL_NAME установлены."
+if [ -z "$HF_TOKEN" ] || [ -z "$HF_USERNAME" ] || [ -z "$NEW_MODEL_NAME" ] || [ -z "$HF_EMAIL" ]; then
+    echo "Ошибка: Убедитесь, что переменные HF_TOKEN, HF_USERNAME, HF_EMAIL и NEW_MODEL_NAME установлены."
     exit 1
 fi
 
@@ -14,23 +14,36 @@ if [ ! -d "/workspace/merged_model_lora" ]; then
     exit 1
 fi
 
+echo ">>> Очистка предыдущих артефактов финальной модели..."
+rm -rf /workspace/final_model
+
+cd /workspace
+
 echo ">>> Шаг 1/3: Впекание LoRA-адаптера в модель..."
 mergekit-hf merge /workspace/merged_model /workspace/merged_model_lora /workspace/final_model --cuda
 
 echo ">>> Шаг 2/3: Подготовка и загрузка на Hugging Face Hub..."
 huggingface-cli repo create ${NEW_MODEL_NAME} --type model --exist-ok
-
-# Используем git clone & cp вместо `upload` для лучшей обработки больших файлов
+rm -rf /workspace/hf_repo
 git clone https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/${HF_USERNAME}/${NEW_MODEL_NAME} /workspace/hf_repo
-cp /workspace/final_model/* /workspace/hf_repo/
+cp -r /workspace/final_model/* /workspace/hf_repo/
+echo ">>> Артефакты успешно скопированы в локальный репозиторий."
 
 echo ">>> Шаг 3/3: Отправка файлов (может быть долго)..."
 cd /workspace/hf_repo
+git config user.name "${HF_USERNAME}"
+git config user.email "${HF_EMAIL}"
 git lfs track "*.safetensors"
 git add .
-git commit -m "Final model from automated pipeline"
-git push
+
+if git diff --cached --quiet; then
+    echo ">>> Нет изменений для коммита. Пропускаем отправку."
+else
+    git commit -m "Final model from automated pipeline"
+    git push
+fi
 
 echo "--- КОНВЕЙЕР УСПЕШНО ЗАВЕРШЕН! ---"
 echo ">>> Ваша модель доступна в репозитории: https://huggingface.co/${HF_USERNAME}/${NEW_MODEL_NAME}"
+echo ">>> Фаза 3 успешно завершена."
 echo ">>> !!! НЕ ЗАБУДЬТЕ ОСТАНОВИТЬ ПОД НА RUNPOD !!!"
