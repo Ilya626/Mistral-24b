@@ -32,12 +32,8 @@ LLAMA_CPP_DIR="${LLAMA_CPP_DIR:-${REPO_ROOT}/third_party/llama.cpp}"
 
 TEMP_MODEL_DIR=""
 CACHED_SOURCE_REPO_ID=""
-cleanup() {
-    if [[ -n "${TEMP_MODEL_DIR}" && -d "${TEMP_MODEL_DIR}" ]]; then
-        rm -rf "${TEMP_MODEL_DIR}"
-    fi
-}
-trap cleanup EXIT
+MODEL_CACHE_ROOT="${MODEL_CACHE_ROOT:-/workspace/models}"
+mkdir -p "${MODEL_CACHE_ROOT}" 2>/dev/null || true
 
 normalize_repo_id() {
     local source="$1"
@@ -114,16 +110,21 @@ resolve_model_dir() {
 
     CACHED_SOURCE_REPO_ID="${repo_id}"
 
-    TEMP_MODEL_DIR="$(mktemp -d)"
     if ! huggingface-cli whoami >/dev/null 2>&1; then
         echo ">>> huggingface-cli login не выполнен. Для приватных моделей авторизуйтесь или задайте переменную HF_TOKEN." >&2
     fi
 
-    echo ">>> Downloading Hugging Face model ${repo_id}" >&2
+    local repo_id_safe
+    repo_id_safe="${repo_id//\//__}"
+    TEMP_MODEL_DIR="${MODEL_CACHE_ROOT}/${repo_id_safe}"
+
+    echo ">>> Downloading Hugging Face model ${repo_id} → ${TEMP_MODEL_DIR}" >&2
+    mkdir -p "${TEMP_MODEL_DIR}"
     huggingface-cli download "${repo_id}" \
         --repo-type model \
         --local-dir "${TEMP_MODEL_DIR}" \
-        --local-dir-use-symlinks False >&2
+        --local-dir-use-symlinks False \
+        --resume-download >&2
 
     printf '%s\n' "${TEMP_MODEL_DIR}"
 }
