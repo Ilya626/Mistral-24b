@@ -113,9 +113,13 @@ if "${PIP_CMD[@]}" show modal >/dev/null 2>&1; then
 fi
 
 echo ">>> Установка Python-зависимостей..."
+AXOLOTL_VERSION="${AXOLOTL_VERSION:-0.9.2}"
+
+echo ">>> Используем версию axolotl=${AXOLOTL_VERSION} (можно изменить через переменную AXOLOTL_VERSION)."
+
 PYTHON_PACKAGES=(
     "accelerate>=1.6.0"
-    "axolotl==0.4.3"
+    "axolotl==${AXOLOTL_VERSION}"
     "bitsandbytes>=0.43.3"
     "datasets>=4.0.0"
     "einops"
