@@ -2,21 +2,22 @@
 
 This module is automatically imported by Python when present on the
 PYTHONPATH.  We use it to patch mergekit so that it recognises the
-`Mistral3ForConditionalGeneration` architecture emitted by the latest
-Mistral models.  The upstream version of mergekit has not been updated
-for this new identifier yet, so without the patch mergekit aborts with
-``RuntimeError: Unsupported architecture Mistral3ForConditionalGeneration``.
+``Mistral3ForConditionalGeneration`` and ``MistralForConditionalGeneration``
+architecture identifiers emitted by recent Mistral models.  The upstream
+version of mergekit has not been updated for these names yet, so without
+the patch mergekit aborts with errors such as
+``RuntimeError: Unsupported architecture MistralForConditionalGeneration``.
 
-The patch remaps the new architecture name to the existing
-`MistralForConditionalGeneration` handler, which is compatible with the
-model structure used by Mistral 3.2 24B.  This keeps mergekit working
-without requiring a fork of the dependency or manual edits in the
-environment.
+The patch remaps these new identifiers to the older
+``MistralForCausalLM`` handler, which is compatible with the model
+structure used by the Vistral and Cydonia checkpoints.  This keeps
+mergekit working without requiring a fork of the dependency or manual
+edits in the environment.
 """
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 
 def _normalise_architectures(value: Any) -> Sequence[str]:
@@ -47,20 +48,27 @@ def _patch_mergekit() -> None:
 
     original_get_architecture_info = architecture.get_architecture_info
 
+    architecture_aliases: Mapping[str, str] = {
+        "Mistral3ForConditionalGeneration": "MistralForCausalLM",
+        "MistralForConditionalGeneration": "MistralForCausalLM",
+    }
+
     def patched_get_architecture_info(config: Any) -> Any:
         architectures = _normalise_architectures(getattr(config, "architectures", ()))
-        if architectures and architectures[0] == "Mistral3ForConditionalGeneration":
+        alias = architecture_aliases.get(architectures[0]) if architectures else None
+        if alias:
             # Temporarily map the architecture name to the older handler
             # used for Mistral models.  We mutate the config in-place but
             # restore the original value afterwards to avoid side effects.
+            replacement = (alias,)
             try:
-                config.architectures = ("MistralForConditionalGeneration",)
+                config.architectures = replacement
             except Exception:
                 # Some configs expose architectures as a property without a
                 # setter.  In that case we fall back to attribute tricks.
                 # We still prefer to restore the original value afterwards.
                 try:
-                    object.__setattr__(config, "architectures", ("MistralForConditionalGeneration",))
+                    object.__setattr__(config, "architectures", replacement)
                 except Exception:
                     pass
             try:
