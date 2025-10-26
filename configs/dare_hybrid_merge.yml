@@ -44,11 +44,11 @@ slices:
       # Указываем, что "умение" Vistral = Vistral - Base
       - model: /workspace/Vistral-24B-Instruct
         base_model: /workspace/Mistral-Small-3.1-24B-Base-2503 # ВАЖНО: Путь к папке из вашего скрипта
-        layer_range: [0, 80]
+        layer_range: [0, 39]
       # Указываем, что "умение" Cydonia = Cydonia - Base
       - model: /workspace/Cydonia-24B-v4.2.0
         base_model: /workspace/Mistral-Small-3.1-24B-Base-2503 # ВАЖНО: Путь к папке из вашего скрипта
-        layer_range: [0, 80]
+        layer_range: [0, 39]
     # Применяем это правило ко ВСЕМ слоям, КРОМЕ тех, что мы уже обработали вручную.
     exclude:
       - model.embed_tokens.weight
