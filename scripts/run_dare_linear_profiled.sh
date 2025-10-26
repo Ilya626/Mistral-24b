@@ -4,6 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# Ensure our Python patches are picked up before invoking mergekit.
+export PYTHONPATH="${REPO_ROOT}/pythonpath${PYTHONPATH:+:${PYTHONPATH}}"
+
 CFG="${REPO_ROOT}/configs/dare_linear_profiled.yml"
 OUT="/workspace/merged_dare_linear_profiled"
 
