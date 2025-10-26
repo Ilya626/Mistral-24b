@@ -117,11 +117,38 @@ AXOLOTL_VERSION="${AXOLOTL_VERSION:-0.9.2}"
 
 echo ">>> Используем версию axolotl=${AXOLOTL_VERSION} (можно изменить через переменную AXOLOTL_VERSION)."
 
+
+DATASETS_REQUIREMENT="$(${PYTHON_BIN} - <<PYTHON
+import sys
+
+def version_tuple(version: str):
+    parts = []
+    for piece in version.split('.'):
+        if piece.isdigit():
+            parts.append(int(piece))
+        else:
+            break
+    return tuple(parts)
+
+axolotl_version = "${AXOLOTL_VERSION}"
+needs_legacy_datasets = version_tuple(axolotl_version) < (0, 10, 0)
+print("datasets==3.5.1" if needs_legacy_datasets else "datasets>=4.0.0")
+PYTHON
+)"
+
+if [[ -z "${DATASETS_REQUIREMENT}" ]]; then
+    echo "Не удалось определить требуемую версию datasets для axolotl=${AXOLOTL_VERSION}." >&2
+    exit 1
+fi
+
+echo ">>> Требуемый пакет datasets: ${DATASETS_REQUIREMENT}"
+
+
 PYTHON_PACKAGES=(
     "accelerate>=1.6.0"
     "axolotl==${AXOLOTL_VERSION}"
     "bitsandbytes>=0.43.3"
-    "datasets>=4.0.0"
+    "${DATASETS_REQUIREMENT}"
     "einops"
     "hf_transfer"
     "huggingface_hub[cli]"
