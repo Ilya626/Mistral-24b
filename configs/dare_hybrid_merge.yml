@@ -12,10 +12,12 @@ slices:
   # Шаг 1.1: Смешиваем общую часть словаря (SLERP)
   - sources:
       - model: /workspace/Vistral-24B-Instruct
-        # layer_range УБРАН, так как embed_tokens не является частью слоя
+        # "Пустой" диапазон для удовлетворения валидатора
+        layer_range: [40, 39]
         tensor_slice: [0, 131072]
       - model: /workspace/Cydonia-24B-v4.2.0
-        # layer_range УБРАН
+        # "Пустой" диапазон для удовлетворения валидатора
+        layer_range: [40, 39]
         tensor_slice: [0, 131072]
     destinations:
       - model.embed_tokens.weight
@@ -26,24 +28,25 @@ slices:
   # Шаг 1.2: Копируем 2 уникальных токена из Vistral (Passthrough)
   - sources:
       - model: /workspace/Vistral-24B-Instruct
-        # layer_range УБРАН
+        # "Пустой" диапазон для удовлетворения валидатора
+        layer_range: [40, 39]
         tensor_slice: [131072, 131074]
     destinations:
       - model.embed_tokens.weight
       - lm_head.weight
-      # merge_method здесь не нужен, так как по умолчанию используется passthrough,
-      # который идеально подходит для копирования из одного источника.
       
   # --- Часть 2: Слияние "тела" модели (DARE TIES) ---
 
   # Шаг 2.1: Для всех трансформерных блоков используем DARE TIES
   - sources:
+      # Указываем, что "умение" Vistral = Vistral - Base
       - model: /workspace/Vistral-24B-Instruct
-        base_model: /workspace/Mistral-Small-3.1-24B-Base-2503
-        layer_range: [0, 39] # <--- ЗДЕСЬ layer_range НУЖЕН и ПРАВИЛЕН
+        base_model: /workspace/Mistral-Small-3.1-24B-Base-2503 # Папка, куда скачана ...Instruct-2506
+        layer_range: [0, 39] # <- Здесь диапазон настоящий
+      # Указываем, что "умение" Cydonia = Cydonia - Base
       - model: /workspace/Cydonia-24B-v4.2.0
-        base_model: /workspace/Mistral-Small-3.1-24B-Base-2503
-        layer_range: [0, 39] # <--- ЗДЕСЬ layer_range НУЖЕН и ПРАВИЛЕН
+        base_model: /workspace/Mistral-Small-3.1-24B-Base-2503 # Папка, куда скачана ...Instruct-2506
+        layer_range: [0, 39] # <- Здесь диапазон настоящий
     exclude:
       - model.embed_tokens.weight
       - lm_head.weight
