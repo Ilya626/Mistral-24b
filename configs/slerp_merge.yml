@@ -1,26 +1,24 @@
-# --- Исправленный конфиг для SLERP слияния ---
-
-# 1. Метод слияния по умолчанию.
-#    Валидатор требует его наличие, даже если он будет переопределен ниже.
+# --- Gradient SLERP: Vistral (RU) x Cydonia (RP) ---
 merge_method: slerp
+base_model: /workspace/Vistral-24B-Instruct   # якорь SLERP (0.0 = чистый Vistral)
 dtype: bfloat16
-base_model: /workspace/Vistral-24B-Instruct
 
-slices:
-  # Мы по-прежнему используем один "срез" для всей модели
-  - sources:
-      # 2. Явное указание диапазона слоев для КАЖДОЙ модели.
-      #    Для полного слияния нужно указать все слои.
-      #    В этих моделях 40 слоев (с 0 по 39).
-      - model: /workspace/Vistral-24B-Instruct
-        layer_range: [0, 39]
-      - model: /workspace/Cydonia-24B-v4.2.0
-        layer_range: [0, 39]
-    # Метод и параметры теперь применяются к этому конкретному срезу
-    merge_method: slerp
-    parameters:
-      t: 0.5 # Коэффициент слияния. 0.5 = ровно посередине.
+models:
+  - model: /workspace/Vistral-24B-Instruct
+  - model: /workspace/Cydonia-24B-v4.2.0
 
-# Объединяем словари, чтобы сохранить все токены.
-tokenizer:
-  source: union
+parameters:
+  # Плавный профиль "снизу больше Vistral (RU), сверху больше Cydonia (RP)"
+  # 5 узлов будет равномерно интерполировано на все слои трансформера.
+  t:
+    - filter: self_attn
+      value: [0.35, 0.45, 0.55, 0.60, 0.65]  # ниже — ближе к Vistral, выше — к Cydonia
+    - filter: mlp
+      value: [0.30, 0.45, 0.55, 0.60, 0.60]
+    - value: 0.50  # дефолт на прочие тензоры (если какие-то не попали под фильтры)
+
+  # SLERP и для embed/lm_head при разных словарях (доступно только для 2 моделей)
+  embed_slerp: true
+
+# Собираем объединённый словарь, чтобы корректно свести "+2 токена" у Vistral
+tokenizer_source: union
