@@ -139,14 +139,25 @@ def _push_patch(config: Any, restorers: list[Callable[[], None]], name: str, val
     return True
 
 
-def _ensure_layer_attribute(config: Any, restorers: list[Callable[[], None]]) -> None:
+def _ensure_layer_attribute(config: Any) -> None:
+    """Ensure ``num_hidden_layers`` is present on ``config``.
+
+    ``mergekit`` expects modern Mistral configs to expose their layer count
+    via a ``num_hidden_layers`` attribute.  The newer ``Mistral3Config`` uses
+    different names (``n_layers``/``num_layers``), which causes
+    ``AttributeError`` during merge planning.  Rather than temporarily
+    monkey-patching the attribute, populate it permanently for the lifetime of
+    the config object so that later ``ArchitectureInfo`` helpers can read it
+    without tripping over a missing attribute.
+    """
+
     if hasattr(config, "num_hidden_layers"):
         return
     value = _resolve_config_value(config, _LAYER_COUNT_CANDIDATES)
     layer_count = _coerce_layer_count(value)
     if layer_count is None:
         return
-    _push_patch(config, restorers, "num_hidden_layers", layer_count)
+    _set_config_attr(config, "num_hidden_layers", layer_count)
 
 
 def _patch_mergekit() -> None:
@@ -172,7 +183,7 @@ def _patch_mergekit() -> None:
         try:
             if alias:
                 _push_patch(config, restorers, "architectures", (alias,))
-            _ensure_layer_attribute(config, restorers)
+            _ensure_layer_attribute(config)
             return original_get_architecture_info(config)
         finally:
             while restorers:
