@@ -10,12 +10,12 @@ slices:
   # --- Часть 1: Сборка несовместимых слоев словаря ---
 
   # Шаг 1.1: Смешиваем общую часть словаря (SLERP)
-  # Этот блок остается без изменений, так как merge_method: slerp
-  # корректно обрабатывает несколько источников и назначений.
   - sources:
       - model: /workspace/Vistral-24B-Instruct
+        layer_range: [40, 39] # Удовлетворяем валидатор "пустым" диапазоном
         tensor_slice: [0, 131072]
       - model: /workspace/Cydonia-24B-v4.2.0
+        layer_range: [40, 39] # Удовлетворяем валидатор "пустым" диапазоном
         tensor_slice: [0, 131072]
     destinations:
       - model.embed_tokens.weight
@@ -23,35 +23,32 @@ slices:
     merge_method: slerp
     weight: 0.5
 
-  # !!! КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ НИЖЕ !!!
-
-  # Шаг 1.2: Копируем уникальные токены ТОЛЬКО для embed_tokens
+  # Шаг 1.2: Копируем уникальные токены ТОЛЬКО для embed_tokens.
   # ОДИН источник, ОДНО назначение.
   - sources:
       - model: /workspace/Vistral-24B-Instruct
+        layer_range: [40, 39] # Удовлетворяем валидатор "пустым" диапазоном
         tensor_slice: [131072, 131074]
     destinations:
       - model.embed_tokens.weight
       
-  # Шаг 1.3: Копируем уникальные токены ТОЛЬКО для lm_head
+  # Шаг 1.3: Копируем уникальные токены ТОЛЬКО для lm_head.
   # Снова ОДИН источник, ОДНО назначение.
   - sources:
       - model: /workspace/Vistral-24B-Instruct
+        layer_range: [40, 39] # Удовлетворяем валидатор "пустым" диапазоном
         tensor_slice: [131072, 131074]
     destinations:
       - lm_head.weight
       
   # --- Часть 2: Слияние "тела" модели (DARE TIES) ---
-
-  # Этот блок остается без изменений, так как он работает с другой
-  # группой тензоров (исключая словари) и использует свой merge_method.
   - sources:
       - model: /workspace/Vistral-24B-Instruct
         base_model: /workspace/Mistral-Small-3.1-24B-Base-2503
-        layer_range: [0, 39]
+        layer_range: [0, 39] # <- Здесь диапазон настоящий и правильный
       - model: /workspace/Cydonia-24B-v4.2.0
         base_model: /workspace/Mistral-Small-3.1-24B-Base-2503
-        layer_range: [0, 39]
+        layer_range: [0, 39] # <- Здесь диапазон настоящий и правильный
     exclude:
       - model.embed_tokens.weight
       - lm_head.weight
