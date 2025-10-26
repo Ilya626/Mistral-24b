@@ -30,7 +30,7 @@ huggingface-cli login
 ./scripts/run_quantize.sh https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.2
 ```
 - `MODEL_SOURCE` — путь, repo ID или URL Hugging Face.
-- `OUTPUT_DIR` (опционально) — папка для GGUF. Для скачанных моделей по умолчанию используется `artifacts/<repo_id>` внутри репозитория, для локальных — сама папка модели.
+- `OUTPUT_DIR` (опционально) — папка для GGUF. Для скачанных моделей по умолчанию используется `/workspace/gguf/<repo_id>` (каталог создаётся автоматически), для локальных — сама папка модели.
 
 Скрипт автоматически скачает модель (если передан ID/URL), создаст float16-базу и квантованный файл в формате `Q4_K_M`.
 

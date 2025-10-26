@@ -117,13 +117,13 @@ resolve_model_dir() {
         echo ">>> huggingface-cli login не выполнен. Для приватных моделей авторизуйтесь или задайте переменную HF_TOKEN." >&2
     fi
 
-    echo ">>> Downloading Hugging Face model ${repo_id}"
+    echo ">>> Downloading Hugging Face model ${repo_id}" >&2
     huggingface-cli download "${repo_id}" \
         --repo-type model \
         --local-dir "${TEMP_MODEL_DIR}" \
         --local-dir-use-symlinks False
 
-    echo "${TEMP_MODEL_DIR}"
+    printf '%s\n' "${TEMP_MODEL_DIR}"
 }
 
 MODEL_DIR="$(resolve_model_dir "${MODEL_SOURCE}")"
@@ -145,7 +145,9 @@ else
             MODEL_ID_SAFE="model"
         fi
         MODEL_ID_SAFE="${MODEL_ID_SAFE//\//__}"
-        OUTPUT_DIR="${REPO_ROOT}/artifacts/${MODEL_ID_SAFE}"
+        DEFAULT_GGUF_ROOT="${DEFAULT_GGUF_ROOT:-/workspace/gguf}"
+        mkdir -p "${DEFAULT_GGUF_ROOT}" 2>/dev/null || true
+        OUTPUT_DIR="${DEFAULT_GGUF_ROOT}/${MODEL_ID_SAFE}"
         if [[ -z "${UPLOAD_REPO}" && -n "${CACHED_SOURCE_REPO_ID}" ]]; then
             if [[ "${CACHED_SOURCE_REPO_ID}" == */* ]]; then
                 local_owner="${CACHED_SOURCE_REPO_ID%%/*}"
