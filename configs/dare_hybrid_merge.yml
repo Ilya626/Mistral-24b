@@ -1,35 +1,54 @@
+# --- Холст для слияния ---
+# Мы строим новую модель на "шасси" от Vistral. Это критически важно,
+# так как только у Vistral есть архитектура под нужный нам большой словарь (131074 токена).
 base_model: /workspace/Vistral-24B-Instruct
 dtype: bfloat16
+
+# --- Режим "ручной сборки" ---
+# Мы будем определять правила для каждой группы слоев отдельно.
 merge_method: passthrough
+
+# --- "Хирургическая" сборка модели по частям ---
 slices:
-  # Часть 1: "Хирургия" для словаря (метод SLERP)
+  # --- Часть 1: Сборка несовместимых слоев словаря ---
+
+  # Шаг 1.1: Смешиваем общую часть словаря (131072 токена), которая есть у обеих моделей.
+  # Для этой части мы используем более простой и надежный SLERP.
   - sources:
       - model: /workspace/Vistral-24B-Instruct
-        tensor_slice:
+        tensor_slice: [0, 131072] # Берем срез матрицы
       - model: /workspace/Cydonia-24B-v3.1
-        tensor_slice:
+        tensor_slice: [0, 131072]
     destinations:
-      - model.embed_tokens.weight
+      - model.embed_tokens.weight # Применяем только к этим двум матрицам
       - lm_head.weight
     merge_method: slerp
-    weight: 0.5
+    weight: 0.5 # Смешиваем их 50/50
+
+  # Шаг 1.2: Копируем 2 уникальных токена, которые есть ТОЛЬКО у Vistral.
+  # Мы не можем их смешать, поэтому просто берем их как есть.
   - sources:
       - model: /workspace/Vistral-24B-Instruct
-        tensor_slice:
+        tensor_slice: [131072, 131074] # Берем только 2 последние строки
     destinations:
       - model.embed_tokens.weight
       - lm_head.weight
       
-  # Часть 2: Сложение "умений" для тела модели (метод DARE TIES)
+  # --- Часть 2: Слияние "тела" модели самым продвинутым методом ---
+
+  # Шаг 2.1: Для всех остальных, полностью совместимых слоев, мы используем DARE TIES.
   - sources:
+      # Указываем, что "умение" Vistral = Vistral - Base
       - model: /workspace/Vistral-24B-Instruct
-        base_model: /workspace/Mistral-Small-3.1-24B-Base-2503
+        base_model: /workspace/Mistral-Small-3.1-24B-Base-2503 # ВАЖНО: Путь к папке из вашего скрипта
+      # Указываем, что "умение" Cydonia = Cydonia - Base
       - model: /workspace/Cydonia-24B-v3.1
-        base_model: /workspace/Mistral-Small-3.1-24B-Base-2503
+        base_model: /workspace/Mistral-Small-3.1-24B-Base-2503 # ВАЖНО: Путь к папке из вашего скрипта
+    # Применяем это правило ко ВСЕМ слоям, КРОМЕ тех, что мы уже обработали вручную.
     exclude:
       - model.embed_tokens.weight
       - lm_head.weight
     merge_method: dare_ties
     parameters:
-      density: 0.5
-      weight: 1.0
+      density: 0.5 # Сохраняем 50% самых важных изменений от каждой модели
+      weight: 1.0  # Применяем эти "умения" с полной силой
