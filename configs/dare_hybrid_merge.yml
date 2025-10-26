@@ -53,10 +53,10 @@ slices:
   # 2. Тело модели — DARE TIES только по слоям трансформера
   - sources:
       - model: /workspace/Vistral-24B-Instruct
-        base_model: /workspace/Mistral-Small-3.1-24B-Base-2503
+        base_model: /workspace/Mistral-Small-3.2-24B-Instruct-2506
         layer_range: [0, 39]     # проверь фактическое число слоёв
       - model: /workspace/Cydonia-24B-v4.2.0
-        base_model: /workspace/Mistral-Small-3.1-24B-Base-2503
+        base_model: /workspace/Mistral-Small-3.2-24B-Instruct-2506
         layer_range: [0, 39]
     include:
       - '^model\\.layers\\..*'
