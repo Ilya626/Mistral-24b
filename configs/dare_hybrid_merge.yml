@@ -16,8 +16,10 @@ slices:
   # Для этой части мы используем более простой и надежный SLERP.
   - sources:
       - model: /workspace/Vistral-24B-Instruct
+        layer_range: [0, 0]
         tensor_slice: [0, 131072] # Берем срез матрицы
       - model: /workspace/Cydonia-24B-v3.1
+        layer_range: [0, 0]
         tensor_slice: [0, 131072]
     destinations:
       - model.embed_tokens.weight # Применяем только к этим двум матрицам
@@ -29,6 +31,7 @@ slices:
   # Мы не можем их смешать, поэтому просто берем их как есть.
   - sources:
       - model: /workspace/Vistral-24B-Instruct
+        layer_range: [0, 0]
         tensor_slice: [131072, 131074] # Берем только 2 последние строки
     destinations:
       - model.embed_tokens.weight
@@ -41,9 +44,11 @@ slices:
       # Указываем, что "умение" Vistral = Vistral - Base
       - model: /workspace/Vistral-24B-Instruct
         base_model: /workspace/Mistral-Small-3.1-24B-Base-2503 # ВАЖНО: Путь к папке из вашего скрипта
+        layer_range: [0, 80]
       # Указываем, что "умение" Cydonia = Cydonia - Base
       - model: /workspace/Cydonia-24B-v3.1
         base_model: /workspace/Mistral-Small-3.1-24B-Base-2503 # ВАЖНО: Путь к папке из вашего скрипта
+        layer_range: [0, 80]
     # Применяем это правило ко ВСЕМ слоям, КРОМЕ тех, что мы уже обработали вручную.
     exclude:
       - model.embed_tokens.weight
