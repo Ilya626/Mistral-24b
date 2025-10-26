@@ -17,7 +17,7 @@ edits in the environment.
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 
 def _normalise_architectures(value: Any) -> Sequence[str]:
@@ -35,6 +35,118 @@ def _normalise_architectures(value: Any) -> Sequence[str]:
     if isinstance(value, Iterable):
         return tuple(str(item) for item in value)
     return ()
+
+
+_LAYER_COUNT_CANDIDATES: Sequence[str] = (
+    "num_hidden_layers",
+    "num_hidden_layers",
+    "num_layers",
+    "n_layers",
+    "hidden_layers",
+    "num_transformer_layers",
+)
+
+
+def _set_config_attr(config: Any, name: str, value: Any) -> bool:
+    try:
+        setattr(config, name, value)
+        return True
+    except Exception:
+        try:
+            object.__setattr__(config, name, value)
+            return True
+        except Exception:
+            return False
+
+
+def _del_config_attr(config: Any, name: str) -> None:
+    try:
+        delattr(config, name)
+    except Exception:
+        try:
+            object.__delattr__(config, name)
+        except Exception:
+            pass
+
+
+def _resolve_config_value(config: Any, names: Sequence[str]) -> Any:
+    for candidate in names:
+        if hasattr(config, candidate):
+            try:
+                value = getattr(config, candidate)
+            except Exception:
+                continue
+            if value is not None:
+                return value
+    config_dict = getattr(config, "__dict__", None)
+    if isinstance(config_dict, Mapping):
+        for candidate in names:
+            if candidate in config_dict:
+                value = config_dict[candidate]
+                if value is not None:
+                    return value
+    to_dict = getattr(config, "to_dict", None)
+    if callable(to_dict):
+        try:
+            data = to_dict()
+        except Exception:
+            data = None
+        if isinstance(data, Mapping):
+            for candidate in names:
+                if candidate in data:
+                    value = data[candidate]
+                    if value is not None:
+                        return value
+    return None
+
+
+def _coerce_layer_count(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        try:
+            value = len(value)
+        except Exception:
+            return None
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return None
+    return count if count > 0 else None
+
+
+def _push_patch(config: Any, restorers: list[Callable[[], None]], name: str, value: Any) -> bool:
+    had_attr = hasattr(config, name)
+    original: Any = None
+    if had_attr:
+        try:
+            original = getattr(config, name)
+        except Exception:
+            had_attr = False
+    if not _set_config_attr(config, name, value):
+        return False
+
+    def restore() -> None:
+        try:
+            if had_attr:
+                _set_config_attr(config, name, original)
+            else:
+                _del_config_attr(config, name)
+        except Exception:
+            pass
+
+    restorers.append(restore)
+    return True
+
+
+def _ensure_layer_attribute(config: Any, restorers: list[Callable[[], None]]) -> None:
+    if hasattr(config, "num_hidden_layers"):
+        return
+    value = _resolve_config_value(config, _LAYER_COUNT_CANDIDATES)
+    layer_count = _coerce_layer_count(value)
+    if layer_count is None:
+        return
+    _push_patch(config, restorers, "num_hidden_layers", layer_count)
 
 
 def _patch_mergekit() -> None:
@@ -56,32 +168,19 @@ def _patch_mergekit() -> None:
     def patched_get_architecture_info(config: Any) -> Any:
         architectures = _normalise_architectures(getattr(config, "architectures", ()))
         alias = architecture_aliases.get(architectures[0]) if architectures else None
-        if alias:
-            # Temporarily map the architecture name to the older handler
-            # used for Mistral models.  We mutate the config in-place but
-            # restore the original value afterwards to avoid side effects.
-            replacement = (alias,)
-            try:
-                config.architectures = replacement
-            except Exception:
-                # Some configs expose architectures as a property without a
-                # setter.  In that case we fall back to attribute tricks.
-                # We still prefer to restore the original value afterwards.
+        restorers: list[Callable[[], None]] = []
+        try:
+            if alias:
+                _push_patch(config, restorers, "architectures", (alias,))
+            _ensure_layer_attribute(config, restorers)
+            return original_get_architecture_info(config)
+        finally:
+            while restorers:
+                restore = restorers.pop()
                 try:
-                    object.__setattr__(config, "architectures", replacement)
+                    restore()
                 except Exception:
                     pass
-            try:
-                return original_get_architecture_info(config)
-            finally:
-                try:
-                    config.architectures = architectures
-                except Exception:
-                    try:
-                        object.__setattr__(config, "architectures", architectures)
-                    except Exception:
-                        pass
-        return original_get_architecture_info(config)
 
     architecture.get_architecture_info = patched_get_architecture_info
     architecture._mistral3_patch_applied = True
