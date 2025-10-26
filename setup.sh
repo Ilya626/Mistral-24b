@@ -117,6 +117,7 @@ AXOLOTL_VERSION="${AXOLOTL_VERSION:-0.9.2}"
 
 echo ">>> Используем версию axolotl=${AXOLOTL_VERSION} (можно изменить через переменную AXOLOTL_VERSION)."
 
+
 DATASETS_REQUIREMENT="$(${PYTHON_BIN} - <<PYTHON
 import sys
 
@@ -141,6 +142,7 @@ if [[ -z "${DATASETS_REQUIREMENT}" ]]; then
 fi
 
 echo ">>> Требуемый пакет datasets: ${DATASETS_REQUIREMENT}"
+
 
 PYTHON_PACKAGES=(
     "accelerate>=1.6.0"
