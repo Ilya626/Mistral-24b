@@ -4,6 +4,9 @@ set -e # Выход при ошибке
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# Ensure our local Python patches are active for mergekit invocations.
+export PYTHONPATH="${REPO_ROOT}/pythonpath${PYTHONPATH:+:${PYTHONPATH}}"
+
 # --- НАСТРОЙКИ ---
 # Путь к вашему новому конфигу
 MERGE_CONFIG="${REPO_ROOT}/configs/slerp_merge.yml"
