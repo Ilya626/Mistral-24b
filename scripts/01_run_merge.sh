@@ -16,7 +16,7 @@ fi
 
 echo ">>> Шаг 1/2: Загрузка 3 моделей (может занять >30 минут)..."
 huggingface-cli download Vikhrmodels/Vistral-24B-Instruct --local-dir /workspace/Vistral-24B-Instruct --exclude "*.bin"
-huggingface-cli download TheDrummer/Cydonia-24B-v3.1 --local-dir /workspace/Cydonia-24B-v3.1 --exclude "*.bin"
+huggingface-cli download TheDrummer/Cydonia-24B-v4.2.0 --local-dir /workspace/Cydonia-24B-v4.2.0 --exclude "*.bin"
 huggingface-cli download mistralai/Mistral-Small-3.2-24B-Instruct-2506 --local-dir /workspace/Mistral-Small-3.1-24B-Base-2503 --exclude "*.bin"
 
 echo ">>> Шаг 2/2: Запуск слияния DARE TIES Hybrid..."
