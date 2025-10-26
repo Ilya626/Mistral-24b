@@ -1,10 +1,10 @@
 # --- DARE-Linear (профиль по глубине) ---
 merge_method: dare_linear
-base_model: /workspace/Mistral-Small-3.2-24B-Instruct-2506
+base_model: &BASE_MODEL /workspace/Mistral-Small-3.2-24B-Instruct-2506
 dtype: bfloat16
 
 models:
-  - model: /workspace/Vistral-24B-Instruct
+  - model: &VISTRAL /workspace/Vistral-24B-Instruct
     # Вклад Vistral: больше внизу, меньше к верху
     parameters:
       weight:
@@ -12,7 +12,7 @@ models:
           value: [0.65, 0.60, 0.55, 0.50, 0.45]
         - filter: mlp
           value: [0.60, 0.55, 0.50, 0.45, 0.40]
-  - model: /workspace/Cydonia-24B-v4.2.0
+  - model: &CYDONIA /workspace/Cydonia-24B-v4.2.0
     # Вклад Cydonia: наоборот — меньше внизу, больше к верху
     parameters:
       weight:
