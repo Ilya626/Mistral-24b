@@ -18,7 +18,7 @@ slices:
       - model: /workspace/Vistral-24B-Instruct
         layer_range: [0, 0]
         tensor_slice: [0, 131072] # Берем срез матрицы
-      - model: /workspace/Cydonia-24B-v3.1
+      - model: /workspace/Cydonia-24B-v4.2.0
         layer_range: [0, 0]
         tensor_slice: [0, 131072]
     destinations:
@@ -46,7 +46,7 @@ slices:
         base_model: /workspace/Mistral-Small-3.1-24B-Base-2503 # ВАЖНО: Путь к папке из вашего скрипта
         layer_range: [0, 80]
       # Указываем, что "умение" Cydonia = Cydonia - Base
-      - model: /workspace/Cydonia-24B-v3.1
+      - model: /workspace/Cydonia-24B-v4.2.0
         base_model: /workspace/Mistral-Small-3.1-24B-Base-2503 # ВАЖНО: Путь к папке из вашего скрипта
         layer_range: [0, 80]
     # Применяем это правило ко ВСЕМ слоям, КРОМЕ тех, что мы уже обработали вручную.
