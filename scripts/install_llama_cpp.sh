@@ -55,8 +55,13 @@ PIP_CMD=("${PYTHON_BIN}" -m pip install --upgrade --root-user-action=ignore)
 PYTHON_PACKAGES=(
     "llama-cpp-python>=0.2.90"
     "huggingface_hub[cli]"
+    "hf-transfer"
+    "transformers>=4.36"
+    "accelerate"
     "sentencepiece"
     "safetensors"
+    "numpy"
+    "tqdm"
 )
 
 "${PYTHON_BIN}" -m pip install --upgrade --root-user-action=ignore "${PYTHON_PACKAGES[@]}"
