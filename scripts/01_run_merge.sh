@@ -16,7 +16,9 @@ fi
 
 echo ">>> Шаг 1/2: Загрузка 3 моделей (может занять >30 минут)..."
 huggingface-cli download Vikhrmodels/Vistral-24B-Instruct --local-dir /workspace/Vistral-24B-Instruct --exclude "*.bin"
-huggingface-cli download TheDrummer/Cydonia-24B-v4.2.0 --local-dir /workspace/Cydonia-24B-v4.2.0 --exclude "*.bin"
+# У Cydonia веса опубликованы только в формате .bin, поэтому исключать их нельзя —
+# иначе mergekit не найдет часть тензоров (например, model.layers.79.mlp.down_proj.weight).
+huggingface-cli download TheDrummer/Cydonia-24B-v4.2.0 --local-dir /workspace/Cydonia-24B-v4.2.0
 huggingface-cli download mistralai/Mistral-Small-3.2-24B-Instruct-2506 --local-dir /workspace/Mistral-Small-3.1-24B-Base-2503 --exclude "*.bin"
 
 echo ">>> Шаг 2/2: Запуск слияния DARE TIES Hybrid..."
