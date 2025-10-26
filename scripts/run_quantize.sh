@@ -23,6 +23,8 @@ UPLOAD_INCLUDE_FLOAT="${HF_UPLOAD_INCLUDE_FLOAT:-0}"
 UPLOAD_PRIVATE="${HF_UPLOAD_PRIVATE:-1}"
 UPLOAD_PREFIX="${HF_UPLOAD_PREFIX:-gguf}"
 UPLOAD_MESSAGE="${HF_UPLOAD_MESSAGE:-Upload quantized GGUF weights}"
+: "${HF_HUB_ENABLE_HF_TRANSFER:=0}"
+export HF_HUB_ENABLE_HF_TRANSFER
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -121,7 +123,7 @@ resolve_model_dir() {
     huggingface-cli download "${repo_id}" \
         --repo-type model \
         --local-dir "${TEMP_MODEL_DIR}" \
-        --local-dir-use-symlinks False
+        --local-dir-use-symlinks False >&2
 
     printf '%s\n' "${TEMP_MODEL_DIR}"
 }
