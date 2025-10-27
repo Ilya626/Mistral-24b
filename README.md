@@ -38,6 +38,26 @@ python3 scripts/aim_profile.py \
 
 При необходимости можно задать `--base-model`, если SLERP должен стартовать не от Vistral, а от другого чекпоинта.
 
+Для быстрой проверки работоспособности скрипта можно ограничиться одной моделью:
+
+```bash
+python3 scripts/aim_profile.py --vistral-model /workspace/Vistral-24B-Instruct --single-model vistral
+```
+
+В этом случае будет выгружена только статистика (`metrics.json`/`metrics.csv`), а профиль SLERP строиться не будет.
+
+Чтобы не ждать прогон всего датасета, можно случайным образом выбрать небольшое подмножество промптов. Например, 20 штук:
+
+```bash
+python3 scripts/aim_profile.py \
+  --vistral-model /workspace/Vistral-24B-Instruct \
+  --single-model vistral \
+  --sample-prompts 20 \
+  --sample-seed 42
+```
+
+Флаг `--sample-prompts` вырезает указанное количество случайных промптов (после применения `--max-prompts` и `--dataset-split`), а `--sample-seed` позволяет детерминировать выборку.
+
 На выходе формируется папка с отметкой времени, где лежат:
 
 - `aim_profile.yml` — готовый профиль для `mergekit-yaml` (можно отредактировать вручную перед использованием);

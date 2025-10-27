@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import random
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -145,16 +146,35 @@ class ModelStatistics:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build an activation-informed SLERP profile from grandmaster2 prompts")
-    parser.add_argument("--vistral-model", type=str, required=True, help="Path or identifier of the Vistral model")
-    parser.add_argument("--cydonia-model", type=str, required=True, help="Path or identifier of the Cydonia model")
+    parser.add_argument("--vistral-model", type=str, default=None, help="Path or identifier of the Vistral model")
+    parser.add_argument("--cydonia-model", type=str, default=None, help="Path or identifier of the Cydonia model")
+    parser.add_argument(
+        "--single-model",
+        type=str,
+        choices=("vistral", "cydonia"),
+        default=None,
+        help="Restrict profiling to a single model (skips loading the other one)",
+    )
     parser.add_argument(
         "--base-model",
         type=str,
         default=None,
-        help="Model identifier to use as base_model in the generated YAML (defaults to --vistral-model)",
+        help="Model identifier to use as base_model in the generated YAML (defaults to the first profiled model)",
     )
     parser.add_argument("--dataset-split", type=str, default="train[:256]", help="grandmaster2 split to use")
     parser.add_argument("--max-prompts", type=int, default=256, help="Maximum prompts to analyse (<= dataset slice)")
+    parser.add_argument(
+        "--sample-prompts",
+        type=int,
+        default=0,
+        help="Randomly sample this many prompts from the loaded slice (0 keeps all prompts)",
+    )
+    parser.add_argument(
+        "--sample-seed",
+        type=int,
+        default=None,
+        help="Seed for the prompt sampler (defaults to an OS-provided seed)",
+    )
     parser.add_argument("--batch-size", type=int, default=4, help="Batch size for inference")
     parser.add_argument(
         "--confidence-threshold",
@@ -191,11 +211,18 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_prompts(split: str, max_prompts: int) -> List[str]:
+def load_prompts(split: str, max_prompts: int, sample_prompts: int, sample_seed: Optional[int]) -> List[str]:
     ds: Dataset = load_dataset("grandmaster2", split=split)  # type: ignore[arg-type]
     prompts = [str(example["prompt"]) for example in ds]
     if max_prompts > 0:
         prompts = prompts[:max_prompts]
+    if sample_prompts > 0:
+        if sample_prompts > len(prompts):
+            raise ValueError(
+                f"Requested {sample_prompts} prompts but only {len(prompts)} are available after max_prompts filtering"
+            )
+        rng = random.Random(sample_seed)
+        prompts = rng.sample(prompts, sample_prompts)
     if not prompts:
         raise RuntimeError("grandmaster2 slice produced an empty prompt list")
     return prompts
@@ -352,21 +379,18 @@ def _json_to_yaml(node, indent: int = 0) -> str:
     return f"{space}{node}\n"
 
 
-def export_metrics_json(path: Path, metadata: Dict[str, object], vistral_stats: Dict[str, object], cydonia_stats: Dict[str, object]) -> None:
+def export_metrics_json(path: Path, metadata: Dict[str, object], model_stats: Dict[str, Dict[str, object]]) -> None:
     payload = {
         "metadata": metadata,
-        "models": {
-            "vistral": vistral_stats,
-            "cydonia": cydonia_stats,
-        },
+        "models": model_stats,
     }
     with path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
 
 
-def export_metrics_csv(path: Path, vistral_stats: Dict[str, object], cydonia_stats: Dict[str, object]) -> None:
+def export_metrics_csv(path: Path, model_stats: Dict[str, Dict[str, object]]) -> None:
     rows: List[Tuple[str, str, str, int, float, float]] = []
-    for model_name, stats in (("vistral", vistral_stats), ("cydonia", cydonia_stats)):
+    for model_name, stats in model_stats.items():
         layer_section = stats["layers"]
         for kind in KIND_KEYS:
             for bucket in BUCKETS:
@@ -397,7 +421,21 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device_map = "auto" if torch.cuda.is_available() else None
 
-    prompts = load_prompts(args.dataset_split, args.max_prompts)
+    if args.vistral_model is None and args.cydonia_model is None:
+        raise RuntimeError("At least one model must be provided for profiling")
+
+    if args.single_model == "vistral" and args.vistral_model is None:
+        raise RuntimeError("--single-model vistral requires --vistral-model to be provided")
+    if args.single_model == "cydonia" and args.cydonia_model is None:
+        raise RuntimeError("--single-model cydonia requires --cydonia-model to be provided")
+
+    run_vistral = args.vistral_model is not None and (args.single_model in (None, "vistral"))
+    run_cydonia = args.cydonia_model is not None and (args.single_model in (None, "cydonia"))
+
+    if not run_vistral and not run_cydonia:
+        raise RuntimeError("Nothing to do: the selected --single-model does not have a corresponding model id")
+
+    prompts = load_prompts(args.dataset_split, args.max_prompts, args.sample_prompts, args.sample_seed)
     templated_prompts = prepare_template_prompts(prompts, args.system_prompt)
 
     def load_model_and_tokenizer(model_id: str) -> Tuple[AutoModelForCausalLM, AutoTokenizer, ModelStatistics]:
@@ -415,14 +453,25 @@ def main() -> None:
         profiler = build_profiler(model)
         return model, tokenizer, profiler
 
-    print("Loading Vistral model...", flush=True)
-    vistral_model, vistral_tokenizer, vistral_stats = load_model_and_tokenizer(args.vistral_model)
-    print("Loading Cydonia model...", flush=True)
-    cydonia_model, cydonia_tokenizer, cydonia_stats = load_model_and_tokenizer(args.cydonia_model)
+    vistral_model: Optional[AutoModelForCausalLM] = None
+    vistral_tokenizer: Optional[AutoTokenizer] = None
+    vistral_stats: Optional[ModelStatistics] = None
+    cydonia_model: Optional[AutoModelForCausalLM] = None
+    cydonia_tokenizer: Optional[AutoTokenizer] = None
+    cydonia_stats: Optional[ModelStatistics] = None
 
-    num_layers = len(vistral_model.model.layers)  # type: ignore[attr-defined]
-    if num_layers != len(cydonia_model.model.layers):  # type: ignore[attr-defined]
-        raise RuntimeError("Models must have the same number of layers for SLERP profiling")
+    if run_vistral:
+        print("Loading Vistral model...", flush=True)
+        vistral_model, vistral_tokenizer, vistral_stats = load_model_and_tokenizer(args.vistral_model)  # type: ignore[arg-type]
+
+    if run_cydonia:
+        print("Loading Cydonia model...", flush=True)
+        cydonia_model, cydonia_tokenizer, cydonia_stats = load_model_and_tokenizer(args.cydonia_model)  # type: ignore[arg-type]
+
+    if run_vistral and run_cydonia and vistral_model is not None and cydonia_model is not None:
+        num_layers = len(vistral_model.model.layers)  # type: ignore[attr-defined]
+        if num_layers != len(cydonia_model.model.layers):  # type: ignore[attr-defined]
+            raise RuntimeError("Models must have the same number of layers for SLERP profiling")
 
     batches = [
         templated_prompts[i : i + args.batch_size]
@@ -457,62 +506,89 @@ def main() -> None:
             )
             stats.commit(mask_all, mask_conf, mask_uncertain, token_logprobs)
 
-    print("Profiling Vistral activations...", flush=True)
-    run_batches(vistral_model, vistral_tokenizer, vistral_stats, "Vistral batches")
-    print("Profiling Cydonia activations...", flush=True)
-    run_batches(cydonia_model, cydonia_tokenizer, cydonia_stats, "Cydonia batches")
+    model_profiles: Dict[str, Dict[str, object]] = {}
 
-    vistral_profile = vistral_stats.finalize()
-    cydonia_profile = cydonia_stats.finalize()
+    if run_vistral and vistral_model is not None and vistral_tokenizer is not None and vistral_stats is not None:
+        print("Profiling Vistral activations...", flush=True)
+        run_batches(vistral_model, vistral_tokenizer, vistral_stats, "Vistral batches")
+        model_profiles["vistral"] = vistral_stats.finalize()
 
-    vistral_attn = torch.tensor(vistral_profile["layers"]["self_attn"]["all"]["mean"], dtype=torch.float32)
-    cydonia_attn = torch.tensor(cydonia_profile["layers"]["self_attn"]["all"]["mean"], dtype=torch.float32)
-    vistral_mlp = torch.tensor(vistral_profile["layers"]["mlp"]["all"]["mean"], dtype=torch.float32)
-    cydonia_mlp = torch.tensor(cydonia_profile["layers"]["mlp"]["all"]["mean"], dtype=torch.float32)
+    if run_cydonia and cydonia_model is not None and cydonia_tokenizer is not None and cydonia_stats is not None:
+        print("Profiling Cydonia activations...", flush=True)
+        run_batches(cydonia_model, cydonia_tokenizer, cydonia_stats, "Cydonia batches")
+        model_profiles["cydonia"] = cydonia_stats.finalize()
 
-    attn_weights = summarize_weights(vistral_attn, cydonia_attn)
-    mlp_weights = summarize_weights(vistral_mlp, cydonia_mlp)
-
-    default_weight = compute_default_weight(
-        vistral_profile["nll"]["all"]["mean"],
-        cydonia_profile["nll"]["all"]["mean"],
-    )
+    if not model_profiles:
+        raise RuntimeError("No profiles were generated. Check model loading configuration.")
 
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     base_dir = Path(args.output_dir) / timestamp
     base_dir.mkdir(parents=True, exist_ok=True)
 
-    profile_path = base_dir / "aim_profile.yml"
-    export_yaml_profile(
-        profile_path,
-        args.base_model or args.vistral_model,
-        args.vistral_model,
-        args.cydonia_model,
-        attn_weights,
-        mlp_weights,
-        default_weight,
-    )
+    generated_profile_path: Optional[Path] = None
+
+    if "vistral" in model_profiles and "cydonia" in model_profiles:
+        vistral_profile = model_profiles["vistral"]
+        cydonia_profile = model_profiles["cydonia"]
+
+        vistral_attn = torch.tensor(vistral_profile["layers"]["self_attn"]["all"]["mean"], dtype=torch.float32)
+        cydonia_attn = torch.tensor(cydonia_profile["layers"]["self_attn"]["all"]["mean"], dtype=torch.float32)
+        vistral_mlp = torch.tensor(vistral_profile["layers"]["mlp"]["all"]["mean"], dtype=torch.float32)
+        cydonia_mlp = torch.tensor(cydonia_profile["layers"]["mlp"]["all"]["mean"], dtype=torch.float32)
+
+        attn_weights = summarize_weights(vistral_attn, cydonia_attn)
+        mlp_weights = summarize_weights(vistral_mlp, cydonia_mlp)
+
+        default_weight = compute_default_weight(
+            vistral_profile["nll"]["all"]["mean"],
+            cydonia_profile["nll"]["all"]["mean"],
+        )
+
+        profile_path = base_dir / "aim_profile.yml"
+        export_yaml_profile(
+            profile_path,
+            args.base_model
+            or args.vistral_model
+            or args.cydonia_model
+            or "",
+            args.vistral_model or "",
+            args.cydonia_model or "",
+            attn_weights,
+            mlp_weights,
+            default_weight,
+        )
+        generated_profile_path = profile_path
 
     metadata = {
         "dataset": "grandmaster2",
         "dataset_split": args.dataset_split,
         "max_prompts": args.max_prompts,
+        "sample_prompts": args.sample_prompts,
+        "sample_seed": args.sample_seed,
         "batch_size": args.batch_size,
         "confidence_threshold": args.confidence_threshold,
         "uncertainty_threshold": args.uncertainty_threshold,
         "dtype": args.dtype,
-        "base_model": args.base_model or args.vistral_model,
+        "base_model": args.base_model or args.vistral_model or args.cydonia_model,
         "timestamp": timestamp,
     }
 
-    export_metrics_json(base_dir / "metrics.json", metadata, vistral_profile, cydonia_profile)
-    export_metrics_csv(base_dir / "metrics.csv", vistral_profile, cydonia_profile)
+    export_metrics_json(base_dir / "metrics.json", metadata, model_profiles)
+    export_metrics_csv(base_dir / "metrics.csv", model_profiles)
 
-    print("Profile saved to", profile_path)
+    if generated_profile_path is not None:
+        print("Profile saved to", generated_profile_path)
+    elif args.single_model is not None:
+        print("Single-model run: SLERP profile generation skipped.")
+    else:
+        print("Only one model was profiled; SLERP profile generation skipped.")
+
     print("Raw metrics saved to", base_dir)
 
-    vistral_stats.remove_hooks()
-    cydonia_stats.remove_hooks()
+    if vistral_stats is not None:
+        vistral_stats.remove_hooks()
+    if cydonia_stats is not None:
+        cydonia_stats.remove_hooks()
 
 
 if __name__ == "__main__":
