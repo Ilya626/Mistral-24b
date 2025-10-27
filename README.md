@@ -1,14 +1,14 @@
 # Mistral-24b Utilities
 
-Этот репозиторий содержит вспомогательные скрипты для подготовки и запуска больших языковых моделей.
+Этот репозиторий содержит набор утилит для слияния (merge) моделей семейства Mistral и быстрой выгрузки результатов на Hugging Face.
 
 ## Быстрый старт
 
-### 1. Установка зависимостей llama.cpp
+### 1. Установка окружения
 ```bash
-./scripts/install_llama_cpp.sh
+sudo ./setup.sh
 ```
-Скрипт скачает исходники `llama.cpp`, соберёт бинарники и установит Python-зависимости.
+Скрипт установит системные пакеты, Git LFS и минимальный набор Python-зависимостей (PyTorch, `transformers`, `mergekit`, `datasets`, `huggingface_hub`).
 
 ### 2. Авторизация в Hugging Face CLI (если требуется доступ к приватным моделям)
 ```bash
@@ -16,38 +16,37 @@ huggingface-cli login
 ```
 Можно также заранее экспортировать токен окружением `export HF_TOKEN=...`.
 
-### 3. Конвертация и квантование модели Hugging Face в GGUF (Q4_K_M)
-Квантовать можно как локальную распакованную модель, так и указав ссылку/ID из Hugging Face.
+### 3. Выполнение слияния моделей
+В репозитории есть два готовых варианта мержа:
+
+- `scripts/01_run_merge.sh` — упрощённый SLERP-мерж Vistral-24B и Cydonia-24B (результат в `/workspace/merged_model`).
+- `scripts/run_dare_linear_profiled.sh` — продвинутый DARE-Linear профильный мердж с использованием базовой модели `Mistral-Small-3.2-24B-Instruct-2506` (результат в `/workspace/merged_dare_linear_profiled`).
+
+Оба скрипта автоматически загружают исходные модели (требуется `HF_TOKEN`) и сохраняют результат в `/workspace/...`.
+
+### 4. Быстрая качественная проверка (опционально)
+Используйте `scripts/evaluate_prompts.py`, чтобы прогнать несколько промптов из датасета `grandmaster2` или из собственного файла:
 
 ```bash
-# Пример для локальной папки
-./scripts/run_quantize.sh /path/to/local/hf-model [/path/to/output]
-
-# Пример для публичного репозитория
-./scripts/run_quantize.sh TheBloke/Mistral-7B-Instruct-v0.2 ./quantized/mistral-7b
-
-# Пример для URL на huggingface.co
-./scripts/run_quantize.sh https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.2
+python3 scripts/evaluate_prompts.py --model /workspace/merged_model
 ```
-- `MODEL_SOURCE` — путь, repo ID или URL Hugging Face.
-- `OUTPUT_DIR` (опционально) — папка для GGUF. Для скачанных моделей по умолчанию используется `/workspace/gguf/<repo_id>` (каталог создаётся автоматически), для локальных — сама папка модели.
 
-Скрипт автоматически скачает модель (если передан ID/URL), создаст float16-базу и квантованный файл в формате `Q4_K_M`.
+Скрипт сохранит ответы в каталоге `evaluation_logs`.
 
-Чтобы автоматически выгрузить результаты на Hugging Face, укажите репозиторий через переменную окружения и (опционально) настро
-йте директорию загрузки:
-
+### 5. Выгрузка результата на Hugging Face
 ```bash
-export HF_UPLOAD_REPO="your-username/your-model-gguf"   # репозиторий, в который нужно заливать артефакты
-export HF_UPLOAD_PREFIX="gguf"                           # (опционально) подпапка внутри репозитория
-export HF_UPLOAD_INCLUDE_FLOAT=0                         # (опционально) 1 — грузить также float16 базовый GGUF
+export HF_USERNAME=your-name
+export HF_TOKEN=hf_xxx
+export HF_EMAIL=you@example.com
+export MERGED_MODEL_REPO_NAME=my-merged-model
 
-./scripts/run_quantize.sh TheBloke/Mistral-7B-Instruct-v0.2
+./scripts/04_upload_merged.sh
 ```
 
-Скрипт проверит авторизацию, при необходимости создаст репозиторий (по умолчанию приватный, флаг `HF_UPLOAD_PRIVATE=0` делает е
-го публичным) и зальёт квантованные веса в указанный путь.
+Скрипт создаст (или обновит) репозиторий на Hugging Face и загрузит в него содержимое каталога с результатами мержа. Для альтернативных директорий (например, DARE-Linear) задайте `MERGED_MODEL_DIR` перед запуском.
 
 ## Структура
-- `scripts/install_llama_cpp.sh` — установка `llama.cpp` и зависимостей.
-- `scripts/run_quantize.sh` — конвертация Hugging Face модели в GGUF и квантование в `Q4_K_M` с поддержкой скачивания по ссылке/ID и выгрузки результата на Hugging Face.
+- `scripts/01_run_merge.sh` — SLERP-мерж Vistral-24B ↔ Cydonia-24B.
+- `scripts/run_dare_linear_profiled.sh` — профильный DARE-Linear мердж для экспериментов.
+- `scripts/04_upload_merged.sh` — загрузка итоговой модели на Hugging Face.
+- `scripts/evaluate_prompts.py` — быстрая ручная проверка качества.

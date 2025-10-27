@@ -14,7 +14,7 @@ MERGE_CONFIG="${REPO_ROOT}/configs/slerp_merge.yml"
 VISTRAL_DIR="/workspace/Vistral-24B-Instruct"
 CYDONIA_DIR="/workspace/Cydonia-24B-v4.2.0"
 # Директория для итоговой модели
-MERGED_DIR="/workspace/merged_model_slerp"
+MERGED_DIR="/workspace/merged_model"
 
 echo "--- УПРОЩЕННОЕ SLERP СЛИЯНИЕ МОДЕЛЕЙ ---"
 

@@ -17,8 +17,6 @@ APT_PACKAGES=(
     build-essential
     git
     git-lfs
-    libcairo2-dev
-    pkg-config
     python3-dev
 )
 MISSING_PACKAGES=()
@@ -113,59 +111,16 @@ if "${PIP_CMD[@]}" show modal >/dev/null 2>&1; then
 fi
 
 echo ">>> Установка Python-зависимостей..."
-AXOLOTL_VERSION="${AXOLOTL_VERSION:-0.9.2}"
-
-echo ">>> Используем версию axolotl=${AXOLOTL_VERSION} (можно изменить через переменную AXOLOTL_VERSION)."
-
-
-DATASETS_REQUIREMENT="$(${PYTHON_BIN} - <<PYTHON
-import sys
-
-def version_tuple(version: str):
-    parts = []
-    for piece in version.split('.'):
-        if piece.isdigit():
-            parts.append(int(piece))
-        else:
-            break
-    return tuple(parts)
-
-axolotl_version = "${AXOLOTL_VERSION}"
-needs_legacy_datasets = version_tuple(axolotl_version) < (0, 10, 0)
-print("datasets==3.5.1" if needs_legacy_datasets else "datasets>=4.0.0")
-PYTHON
-)"
-
-if [[ -z "${DATASETS_REQUIREMENT}" ]]; then
-    echo "Не удалось определить требуемую версию datasets для axolotl=${AXOLOTL_VERSION}." >&2
-    exit 1
-fi
-
-echo ">>> Требуемый пакет datasets: ${DATASETS_REQUIREMENT}"
-
-
 PYTHON_PACKAGES=(
-    "accelerate>=1.6.0"
-    "axolotl==${AXOLOTL_VERSION}"
-    "bitsandbytes>=0.43.3"
-    "${DATASETS_REQUIREMENT}"
-    "einops"
-    "hf_transfer"
+    "accelerate>=1.2.0"
+    "datasets>=2.19.0"
     "huggingface_hub[cli]"
-    "peft"
-    "protobuf"
-    "pyarrow"
+    "mergekit[hf]"
     "safetensors>=0.5.2"
-    "scipy"
     "sentencepiece"
-    "tokenizers"
-    "transformers"
-    "tqdm"
+    "transformers>=4.46.0"
 )
 "${PIP_CMD[@]}" install --upgrade --root-user-action=ignore "${PYTHON_PACKAGES[@]}"
-
-echo ">>> Установка mergekit с поддержкой HF..."
-"${PIP_CMD[@]}" install --upgrade --root-user-action=ignore "mergekit[hf]"
 
 echo ">>> Проверка ключевых Python-пакетов..."
 "${PYTHON_BIN}" - <<'PYTHON'
@@ -177,8 +132,7 @@ modules = [
     "mergekit",
     "datasets",
     "transformers",
-    "axolotl",
-    "bitsandbytes",
+    "accelerate",
 ]
 for module in modules:
     importlib.import_module(module)
