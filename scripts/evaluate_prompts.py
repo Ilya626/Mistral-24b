@@ -81,6 +81,11 @@ def parse_args() -> argparse.Namespace:
         help="Directory to store JSON logs with generations.",
     )
     parser.add_argument(
+        "--save-markdown",
+        action="store_true",
+        help="Additionally save generations to a Markdown report for manual review.",
+    )
+    parser.add_argument(
         "--trust-remote-code",
         action="store_true",
         help="Forward trust_remote_code flag to transformers loaders.",
@@ -209,7 +214,36 @@ def main() -> None:
     with output_path.open("w", encoding="utf-8") as fp:
         json.dump({"model": args.model, "prompts": generations}, fp, ensure_ascii=False, indent=2)
 
+    if args.save_markdown:
+        markdown_path = output_dir / f"evaluation_{timestamp}.md"
+        markdown_lines = [
+            f"# Evaluation Report", "",
+            f"- **Model:** `{args.model}`",
+            f"- **Timestamp:** {timestamp}",
+            f"- **Prompts:** {len(generations)}",
+            "",
+        ]
+        for idx, item in enumerate(generations, start=1):
+            markdown_lines.extend(
+                [
+                    f"## Prompt {idx:02d}",
+                    "",
+                    "### Input",
+                    "",
+                    f"```\n{item['prompt']}\n```",
+                    "",
+                    "### Generation",
+                    "",
+                    f"```\n{item['generation']}\n```",
+                    "",
+                ]
+            )
+        with markdown_path.open("w", encoding="utf-8") as md_file:
+            md_file.write("\n".join(markdown_lines))
+
     print(f"\n>>> Оценка завершена. Лог сохранён: {output_path}")
+    if args.save_markdown:
+        print(f">>> Markdown-отчёт сохранён: {markdown_path}")
 
 
 if __name__ == "__main__":
