@@ -24,6 +24,28 @@ huggingface-cli login
 
 Оба скрипта автоматически загружают исходные модели (требуется `HF_TOKEN`) и сохраняют результат в `/workspace/...`.
 
+`01_run_merge.sh` принимает флаг `--profile` (или переменную окружения `MERGE_CONFIG`), чтобы использовать произвольный YAML-профиль — например, сгенерированный AIM-профайлером.
+
+### 3.1. Построение AIM-профиля SLERP (опционально)
+Чтобы получить детальный 40-слойный профиль на основе активаций обеих моделей, используйте `scripts/aim_profile.py`. Скрипт жёстко работает с датасетом `grandmaster2`, применяет единый Llama 3 шаблон чата и собирает статистику по «уверенным»/«неуверенным» токенам.
+
+```bash
+python3 scripts/aim_profile.py \
+  --vistral-model /workspace/Vistral-24B-Instruct \
+  --cydonia-model /workspace/Cydonia-24B-v4.2.0 \
+  --output-dir profiles/grandmaster2
+```
+
+При необходимости можно задать `--base-model`, если SLERP должен стартовать не от Vistral, а от другого чекпоинта.
+
+На выходе формируется папка с отметкой времени, где лежат:
+
+- `aim_profile.yml` — готовый профиль для `mergekit-yaml` (можно отредактировать вручную перед использованием);
+- `metrics.json` — агрегированные метрики по всем 40 слоям (уверенность, неуверенность, перплексия);
+- `metrics.csv` — табличное представление средних норм и количества токенов для быстрого анализа.
+
+Затем можно запустить `01_run_merge.sh --profile profiles/grandmaster2/<timestamp>/aim_profile.yml` для слияния с учётом собранных весов.
+
 ### 4. Быстрая качественная проверка (опционально)
 Используйте `scripts/evaluate_prompts.py`, чтобы прогнать несколько промптов из датасета `grandmaster2` или из собственного файла:
 
@@ -47,6 +69,7 @@ export MERGED_MODEL_REPO_NAME=my-merged-model
 
 ## Структура
 - `scripts/01_run_merge.sh` — SLERP-мерж Vistral-24B ↔ Cydonia-24B.
+- `scripts/aim_profile.py` — построение AIM-профиля для градиентного SLERP.
 - `scripts/run_dare_linear_profiled.sh` — профильный DARE-Linear мердж для экспериментов.
 - `scripts/04_upload_merged.sh` — загрузка итоговой модели на Hugging Face.
 - `scripts/evaluate_prompts.py` — быстрая ручная проверка качества.

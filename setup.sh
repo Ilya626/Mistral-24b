@@ -119,6 +119,7 @@ PYTHON_PACKAGES=(
     "safetensors>=0.5.2"
     "sentencepiece"
     "transformers>=4.46.0"
+    "tqdm"
 )
 "${PIP_CMD[@]}" install --upgrade --root-user-action=ignore "${PYTHON_PACKAGES[@]}"
 
@@ -133,6 +134,7 @@ modules = [
     "datasets",
     "transformers",
     "accelerate",
+    "tqdm",
 ]
 for module in modules:
     importlib.import_module(module)
