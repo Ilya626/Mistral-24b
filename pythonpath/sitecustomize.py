@@ -229,7 +229,9 @@ def _patch_mergekit() -> None:
     original_num_layers = architecture.ArchitectureInfo.num_layers
 
     def patched_num_layers(self: Any, config: Any) -> int:
+
         _ensure_layer_attribute(config)
+
         try:
             return original_num_layers(self, config)
         except AttributeError:
