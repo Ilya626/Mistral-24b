@@ -48,6 +48,10 @@ _LAYER_COUNT_CANDIDATES: Sequence[str] = (
     "num_decoder_layers",
 )
 
+_NON_NUM_HIDDEN_LAYER_CANDIDATES: Sequence[str] = tuple(
+    name for name in _LAYER_COUNT_CANDIDATES if name != "num_hidden_layers"
+)
+
 
 def _set_config_attr(config: Any, name: str, value: Any) -> bool:
     try:
@@ -167,14 +171,18 @@ def _push_patch(config: Any, restorers: list[Callable[[], None]], name: str, val
     return True
 
 
-def _get_layer_count(config: Any) -> int | None:
-    value = _resolve_config_value(config, _LAYER_COUNT_CANDIDATES)
+def _get_layer_count(
+    config: Any, *, candidates: Sequence[str] | None = None
+) -> int | None:
+    lookup = candidates if candidates is not None else _LAYER_COUNT_CANDIDATES
+
+    value = _resolve_config_value(config, lookup)
     coerced = _coerce_layer_count(value)
     if coerced is not None:
         return coerced
 
     visited: set[int] = set()
-    layer_count = _search_layer_count(config, visited)
+    layer_count = _search_layer_count(config, visited, lookup)
     if layer_count is not None:
         return layer_count
 
@@ -185,14 +193,16 @@ def _get_layer_count(config: Any) -> int | None:
         except Exception:
             data = None
         if isinstance(data, MappingABC):
-            layer_count = _search_layer_count(data, visited)
+            layer_count = _search_layer_count(data, visited, lookup)
             if layer_count is not None:
                 return layer_count
 
     return None
 
 
-def _search_layer_count(value: Any, visited: set[int]) -> int | None:
+def _search_layer_count(
+    value: Any, visited: set[int], candidates: Sequence[str]
+) -> int | None:
     if value is None:
         return None
 
@@ -201,7 +211,7 @@ def _search_layer_count(value: Any, visited: set[int]) -> int | None:
         return None
     visited.add(marker)
 
-    for candidate in _LAYER_COUNT_CANDIDATES:
+    for candidate in candidates:
         if hasattr(value, candidate):
             try:
                 attr_value = getattr(value, candidate)
@@ -220,19 +230,19 @@ def _search_layer_count(value: Any, visited: set[int]) -> int | None:
             mapping = dictionary
 
     if mapping is not None:
-        for candidate in _LAYER_COUNT_CANDIDATES:
+        for candidate in candidates:
             if candidate in mapping:
                 coerced = _coerce_layer_count(mapping[candidate])
                 if coerced is not None:
                     return coerced
         for item in mapping.values():
-            layer_count = _search_layer_count(item, visited)
+            layer_count = _search_layer_count(item, visited, candidates)
             if layer_count is not None:
                 return layer_count
 
     if isinstance(value, SequenceABC) and not isinstance(value, (str, bytes, bytearray)):
         for item in value:
-            layer_count = _search_layer_count(item, visited)
+            layer_count = _search_layer_count(item, visited, candidates)
             if layer_count is not None:
                 return layer_count
 
@@ -251,14 +261,23 @@ def _ensure_layer_attribute(config: Any) -> int | None:
     without tripping over a missing attribute.
     """
 
+    existing_value = None
     if hasattr(config, "num_hidden_layers"):
         try:
-            value = getattr(config, "num_hidden_layers")
+            existing_value = getattr(config, "num_hidden_layers")
         except Exception:
-            value = None
-        coerced = _coerce_layer_count(value)
-        if coerced:
-            return coerced
+            existing_value = None
+
+    existing_count = _coerce_layer_count(existing_value)
+
+    derived_count = _get_layer_count(config, candidates=_NON_NUM_HIDDEN_LAYER_CANDIDATES)
+    if derived_count is not None:
+        if existing_count != derived_count:
+            _set_config_attr(config, "num_hidden_layers", derived_count)
+        return derived_count
+
+    if existing_count is not None:
+        return existing_count
 
     layer_count = _get_layer_count(config)
     if layer_count is None:
