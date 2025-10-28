@@ -52,6 +52,8 @@ _NON_NUM_HIDDEN_LAYER_CANDIDATES: Sequence[str] = tuple(
     name for name in _LAYER_COUNT_CANDIDATES if name != "num_hidden_layers"
 )
 
+_LAYER_OVERRIDE_ATTR = "_mistral_layer_range_override"
+
 
 def _set_config_attr(config: Any, name: str, value: Any) -> bool:
     try:
@@ -309,6 +311,9 @@ def _ensure_layer_attribute(config: Any) -> int | None:
     without tripping over a missing attribute.
     """
 
+    override_value = getattr(config, _LAYER_OVERRIDE_ATTR, None)
+    override_count = _coerce_layer_count(override_value)
+
     existing_value = None
     if hasattr(config, "num_hidden_layers"):
         try:
@@ -317,6 +322,11 @@ def _ensure_layer_attribute(config: Any) -> int | None:
             existing_value = None
 
     existing_count = _coerce_layer_count(existing_value)
+
+    if override_count is not None:
+        if existing_count != override_count:
+            _set_config_attr(config, "num_hidden_layers", override_count)
+        return override_count
 
     derived_count = _get_layer_count(config, candidates=_NON_NUM_HIDDEN_LAYER_CANDIDATES)
     if derived_count is not None:
@@ -413,6 +423,9 @@ def _patch_mergekit() -> None:
         layer_range = getattr(self, "layer_range", None)
         range_count = _layer_range_length(layer_range, preferred=preferred)
         if range_count is not None:
+            if config_obj is not None:
+                _set_config_attr(config_obj, _LAYER_OVERRIDE_ATTR, range_count)
+                _set_config_attr(config_obj, "num_hidden_layers", range_count)
             return range_count
 
         if preferred is not None:
