@@ -8,6 +8,8 @@ models:
     # Вклад Vistral: больше внизу, меньше к верху
     parameters:
       weight:
+        - filter: default
+          value: [0.50, 0.50, 0.50, 0.50, 0.50]
         - filter: self_attn
           value: [0.65, 0.60, 0.55, 0.50, 0.45]
         - filter: mlp
@@ -16,6 +18,8 @@ models:
     # Вклад Cydonia: наоборот — меньше внизу, больше к верху
     parameters:
       weight:
+        - filter: default
+          value: [0.50, 0.50, 0.50, 0.50, 0.50]
         - filter: self_attn
           value: [0.35, 0.40, 0.45, 0.50, 0.55]
         - filter: mlp
@@ -25,6 +29,8 @@ parameters:
   # Разреживание дельт DARE: можно тоже «профилировать» и/или
   # делать его отличным для attn и mlp (значения — примерные)
   density:
+    - filter: default
+      value: [0.60, 0.58, 0.58, 0.55, 0.55]
     - filter: self_attn
       value: [0.65, 0.60, 0.60, 0.55, 0.55]
     - filter: mlp
