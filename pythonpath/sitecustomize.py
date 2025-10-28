@@ -173,19 +173,26 @@ def _layer_range_length(
     if step == 0:
         return None
 
-    if step > 0:
-        if stop < start:
-            return None
-        inclusive = ((stop - start) // step) + 1
-        exclusive = ((stop - start) // step)
-    else:
-        if stop > start:
-            return None
-        step = -step
-        inclusive = ((start - stop) // step) + 1
-        exclusive = ((start - stop) // step)
+    forward = step > 0
+    step = abs(step)
 
-    candidates = [value for value in (inclusive, exclusive) if value and value > 0]
+    delta = stop - start
+    if (forward and delta < 0) or (not forward and delta > 0):
+        return None
+
+    delta = abs(delta)
+    exclusive = (delta + step - 1) // step
+
+    inclusive: int | None = None
+    if delta % step == 0:
+        inclusive = exclusive + 1 if exclusive > 0 else 1
+
+    candidates = []
+    if exclusive > 0:
+        candidates.append(exclusive)
+    if inclusive is not None and inclusive != exclusive:
+        candidates.append(inclusive)
+
     if not candidates:
         return None
 
@@ -194,7 +201,7 @@ def _layer_range_length(
             if candidate == preferred:
                 return candidate
 
-    return max(candidates)
+    return candidates[0]
 
 
 def _push_patch(config: Any, restorers: list[Callable[[], None]], name: str, value: Any) -> bool:
