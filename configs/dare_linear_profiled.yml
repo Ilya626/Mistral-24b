@@ -14,6 +14,10 @@ models:
           value: [0.65, 0.60, 0.55, 0.50, 0.45]
         - filter: mlp
           value: [0.60, 0.55, 0.50, 0.45, 0.40]
+        - tensors:
+            - model.embed_tokens.weight
+            - lm_head.weight
+          value: 0.50
   - model: &CYDONIA /workspace/Cydonia-24B-v4.2.0
     # Вклад Cydonia: наоборот — меньше внизу, больше к верху
     parameters:
@@ -24,6 +28,10 @@ models:
           value: [0.35, 0.40, 0.45, 0.50, 0.55]
         - filter: mlp
           value: [0.40, 0.45, 0.50, 0.55, 0.60]
+        - tensors:
+            - model.embed_tokens.weight
+            - lm_head.weight
+          value: 0.50
 
 parameters:
   # Разреживание дельт DARE: можно тоже «профилировать» и/или
@@ -35,6 +43,10 @@ parameters:
       value: [0.65, 0.60, 0.60, 0.55, 0.55]
     - filter: mlp
       value: [0.60, 0.55, 0.55, 0.50, 0.50]
+    - tensors:
+        - model.embed_tokens.weight
+        - lm_head.weight
+      value: 1.0
   normalize: true   # веса нормализуются автоматически
 
 # Словарь объединяем, чтобы сохранить +2 токена Vistral
