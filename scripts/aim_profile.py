@@ -14,7 +14,7 @@ import random
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 import torch
 from datasets import Dataset, load_dataset
@@ -85,17 +85,44 @@ class ModelStatistics:
         handle = layer_module.register_forward_hook(hook)
         self.hooks.append(handle)
 
-    def commit(self, mask_all: torch.Tensor, mask_conf: torch.Tensor, mask_uncertain: torch.Tensor, token_logprobs: torch.Tensor) -> None:
+    def commit(
+        self,
+        mask_all: torch.Tensor,
+        mask_conf: torch.Tensor,
+        mask_uncertain: torch.Tensor,
+        token_logprobs: torch.Tensor,
+    ) -> List[Dict[str, Any]]:
         mask_all_cpu = mask_all.cpu()
         mask_conf_cpu = mask_conf.cpu()
         mask_uncertain_cpu = mask_uncertain.cpu()
         logprobs_cpu = token_logprobs.detach().to(torch.float32).cpu()
 
+        batch_size = mask_all_cpu.shape[0]
+        first_buffer = next(iter(self.current_buffers.values()))
+        num_layers = len(first_buffer)
+        per_prompt_layers: List[Dict[str, Any]] = []
+        for _ in range(batch_size):
+            per_prompt_layers.append(
+                {
+                    kind: {
+                        bucket: {
+                            "sum": [0.0] * num_layers,
+                            "count": [0] * num_layers,
+                            "mean": [None] * num_layers,
+                        }
+                        for bucket in BUCKETS
+                    }
+                    for kind in KIND_KEYS
+                }
+            )
+
         for kind in KIND_KEYS:
             buffers = self.current_buffers[kind]
             for layer_idx, norms in enumerate(buffers):
                 if norms is None:
-                    raise RuntimeError(f"Missing activations for {kind} layer {layer_idx}. Hooks might not be registered correctly.")
+                    raise RuntimeError(
+                        f"Missing activations for {kind} layer {layer_idx}. Hooks might not be registered correctly."
+                    )
                 # Align with shifted labels (ignore the BOS token).
                 trimmed = norms[:, 1:]
                 if trimmed.shape != mask_all_cpu.shape:
@@ -108,12 +135,38 @@ class ModelStatistics:
                     bucket_stats.sums[layer_idx] += masked_values.sum()
                     bucket_stats.counts[layer_idx] += mask.sum().item()
 
+                    for prompt_idx in range(batch_size):
+                        prompt_mask = mask[prompt_idx]
+                        prompt_values = trimmed[prompt_idx]
+                        prompt_count = int(prompt_mask.sum().item())
+                        if prompt_count > 0:
+                            prompt_sum = float(prompt_values.masked_select(prompt_mask).sum().item())
+                        else:
+                            prompt_sum = 0.0
+                        per_prompt_layers[prompt_idx][kind][bucket]["sum"][layer_idx] = prompt_sum
+                        per_prompt_layers[prompt_idx][kind][bucket]["count"][layer_idx] = prompt_count
+
         for bucket, mask in zip(BUCKETS, (mask_all_cpu, mask_conf_cpu, mask_uncertain_cpu)):
             selected = logprobs_cpu.masked_select(mask)
             if selected.numel() == 0:
                 continue
             self.nll_sums[bucket] += float(-selected.sum().item())
             self.nll_counts[bucket] += int(selected.numel())
+
+        for prompt_layers in per_prompt_layers:
+            for kind in KIND_KEYS:
+                for bucket in BUCKETS:
+                    sums = prompt_layers[kind][bucket]["sum"]
+                    counts = prompt_layers[kind][bucket]["count"]
+                    means = []
+                    for value_sum, value_count in zip(sums, counts):
+                        if value_count > 0:
+                            means.append(float(value_sum / value_count))
+                        else:
+                            means.append(None)
+                    prompt_layers[kind][bucket]["mean"] = means
+
+        return per_prompt_layers
 
     def finalize(self) -> Dict[str, object]:
         data: Dict[str, object] = {
@@ -211,6 +264,27 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+@dataclass
+class PromptRecord:
+    prompt: str
+    prompt_id: Optional[str]
+    reaction: Optional[Any]
+
+    def to_serializable(
+        self,
+        index: int,
+        per_model_metrics: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        data: Dict[str, Any] = {"index": index, "prompt": self.prompt}
+        if self.prompt_id is not None:
+            data["id"] = self.prompt_id
+        if self.reaction is not None:
+            data["reaction"] = self.reaction
+        if per_model_metrics:
+            data["models"] = per_model_metrics
+        return data
+
+
 def _extract_prompt(example: Dict[str, object]) -> str:
     if "prompt" in example and example["prompt"] is not None:
         return str(example["prompt"])
@@ -231,21 +305,47 @@ def _extract_prompt(example: Dict[str, object]) -> str:
     raise ValueError("Unable to extract a prompt from dataset example. Expected 'prompt' string or user messages in 'conversation'.")
 
 
-def load_prompts(split: str, max_prompts: int, sample_prompts: int, sample_seed: Optional[int]) -> List[str]:
+def _extract_prompt_id(example: Dict[str, object]) -> Optional[str]:
+    for key in ("id", "prompt_id", "conversation_id"):
+        value = example.get(key)
+        if value is not None:
+            return str(value)
+    return None
+
+
+def _extract_reaction(example: Dict[str, object]) -> Optional[Any]:
+    for key in ("reaction", "reactions"):
+        if key in example:
+            value = example[key]
+            if value is not None:
+                return value
+    return None
+
+
+def load_prompt_records(
+    split: str, max_prompts: int, sample_prompts: int, sample_seed: Optional[int]
+) -> List[PromptRecord]:
     ds: Dataset = load_dataset("Vikhrmodels/GrandMaster2", split=split)  # type: ignore[arg-type]
-    prompts = [_extract_prompt(example) for example in ds]
+    records = [
+        PromptRecord(
+            prompt=_extract_prompt(example),
+            prompt_id=_extract_prompt_id(example),
+            reaction=_extract_reaction(example),
+        )
+        for example in ds
+    ]
     if max_prompts > 0:
-        prompts = prompts[:max_prompts]
+        records = records[:max_prompts]
     if sample_prompts > 0:
-        if sample_prompts > len(prompts):
+        if sample_prompts > len(records):
             raise ValueError(
-                f"Requested {sample_prompts} prompts but only {len(prompts)} are available after max_prompts filtering"
+                f"Requested {sample_prompts} prompts but only {len(records)} are available after max_prompts filtering"
             )
         rng = random.Random(sample_seed)
-        prompts = rng.sample(prompts, sample_prompts)
-    if not prompts:
+        records = rng.sample(records, sample_prompts)
+    if not records:
         raise RuntimeError("GrandMaster2 slice produced an empty prompt list")
-    return prompts
+    return records
 
 
 def _resolve_model_identifier(model_id: str) -> Union[str, Path]:
@@ -267,8 +367,8 @@ def apply_llama3_template(system_prompt: str, user_prompt: str) -> str:
     return "".join(parts)
 
 
-def prepare_template_prompts(prompts: Iterable[str], system_prompt: str) -> List[str]:
-    return [apply_llama3_template(system_prompt, prompt) for prompt in prompts]
+def prepare_template_prompts(prompts: Iterable[PromptRecord], system_prompt: str) -> List[str]:
+    return [apply_llama3_template(system_prompt, record.prompt) for record in prompts]
 
 
 def resolve_dtype(name: str) -> torch.dtype:
@@ -336,6 +436,64 @@ def derive_bucket_masks(mask_all: torch.Tensor, probs: torch.Tensor, confidence_
     mask_conf = mask_all & (probs >= confidence_threshold)
     mask_uncertain = mask_all & (probs <= uncertainty_threshold)
     return mask_all, mask_conf, mask_uncertain
+
+
+def _summarize_bucket(mask: torch.Tensor, probs: torch.Tensor, logprobs: torch.Tensor) -> Dict[str, Any]:
+    count = int(mask.sum().item())
+    if count == 0:
+        return {
+            "token_count": 0,
+            "mean_prob": None,
+            "mean_logprob": None,
+            "nll": None,
+        }
+    selected_probs = probs.masked_select(mask)
+    selected_logprobs = logprobs.masked_select(mask)
+    mean_prob = float(selected_probs.mean().item()) if selected_probs.numel() > 0 else None
+    mean_logprob = float(selected_logprobs.mean().item()) if selected_logprobs.numel() > 0 else None
+    nll = float(-selected_logprobs.sum().item()) if selected_logprobs.numel() > 0 else None
+    return {
+        "token_count": count,
+        "mean_prob": mean_prob,
+        "mean_logprob": mean_logprob,
+        "nll": nll,
+    }
+
+
+def compute_prompt_metrics(
+    mask_all: torch.Tensor,
+    mask_conf: torch.Tensor,
+    mask_uncertain: torch.Tensor,
+    probs: torch.Tensor,
+    logprobs: torch.Tensor,
+    *,
+    layer_stats: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    summary_all = _summarize_bucket(mask_all, probs, logprobs)
+    summary_conf = _summarize_bucket(mask_conf, probs, logprobs)
+    summary_uncertain = _summarize_bucket(mask_uncertain, probs, logprobs)
+
+    total_tokens = summary_all["token_count"]
+    metrics: Dict[str, Any] = {
+        "token_count": total_tokens,
+        "buckets": {
+            "all": summary_all,
+            "confident": summary_conf,
+            "uncertain": summary_uncertain,
+        },
+    }
+
+    if total_tokens > 0:
+        metrics["confidence_ratio"] = summary_conf["token_count"] / total_tokens
+        metrics["uncertainty_ratio"] = summary_uncertain["token_count"] / total_tokens
+    else:
+        metrics["confidence_ratio"] = None
+        metrics["uncertainty_ratio"] = None
+
+    if layer_stats is not None:
+        metrics["layers"] = layer_stats
+
+    return metrics
 
 
 def summarize_weights(vistral_values: torch.Tensor, cydonia_values: torch.Tensor) -> List[float]:
@@ -441,6 +599,33 @@ def export_metrics_csv(path: Path, model_stats: Dict[str, Dict[str, object]]) ->
         writer.writerows(rows)
 
 
+def _json_default_encoder(obj: object) -> object:
+    if isinstance(obj, set):
+        return list(obj)
+    if isinstance(obj, tuple):
+        return list(obj)
+    return str(obj)
+
+
+def export_prompt_records(
+    path: Path,
+    prompts: List[PromptRecord],
+    model_metrics: Dict[str, List[Optional[Dict[str, Any]]]],
+) -> None:
+    payload: List[Dict[str, Any]] = []
+    for index, record in enumerate(prompts):
+        per_model = {
+            model_name: metrics[index]
+            for model_name, metrics in model_metrics.items()
+            if index < len(metrics) and metrics[index] is not None
+        }
+        data = record.to_serializable(index, per_model if per_model else None)
+        payload.append(data)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, ensure_ascii=False, default=_json_default_encoder)
+
+
 def main() -> None:
     args = parse_args()
 
@@ -462,8 +647,9 @@ def main() -> None:
     if not run_vistral and not run_cydonia:
         raise RuntimeError("Nothing to do: the selected --single-model does not have a corresponding model id")
 
-    prompts = load_prompts(args.dataset_split, args.max_prompts, args.sample_prompts, args.sample_seed)
-    templated_prompts = prepare_template_prompts(prompts, args.system_prompt)
+    prompt_records = load_prompt_records(args.dataset_split, args.max_prompts, args.sample_prompts, args.sample_seed)
+    templated_prompts = prepare_template_prompts(prompt_records, args.system_prompt)
+    indexed_prompts = list(enumerate(templated_prompts))
 
     def load_model_and_tokenizer(model_id: str) -> Tuple[AutoModelForCausalLM, AutoTokenizer, ModelStatistics]:
         target = _resolve_model_identifier(model_id)
@@ -502,8 +688,8 @@ def main() -> None:
             raise RuntimeError("Models must have the same number of layers for SLERP profiling")
 
     batches = [
-        templated_prompts[i : i + args.batch_size]
-        for i in range(0, len(templated_prompts), args.batch_size)
+        indexed_prompts[i : i + args.batch_size]
+        for i in range(0, len(indexed_prompts), args.batch_size)
     ]
 
     def run_batches(
@@ -511,16 +697,19 @@ def main() -> None:
         tokenizer: AutoTokenizer,
         stats: ModelStatistics,
         description: str,
+        prompt_metrics: List[Optional[Dict[str, Any]]],
     ) -> None:
         model_device = resolve_model_device(model)
-        for batch_prompts in tqdm(batches, desc=description, unit="batch"):
+        ensure_pad_token(tokenizer)
+        for batch in tqdm(batches, desc=description, unit="batch"):
+            batch_indices = [index for index, _ in batch]
+            batch_prompts = [prompt for _, prompt in batch]
             inputs = tokenizer(
                 batch_prompts,
                 padding=True,
                 return_tensors="pt",
                 add_special_tokens=False,
             )
-            ensure_pad_token(tokenizer)
             inputs = move_inputs_to_device(inputs, model_device)
             labels = inputs["input_ids"].clone()
             labels[labels == tokenizer.pad_token_id] = -100
@@ -532,18 +721,40 @@ def main() -> None:
             mask_all, mask_conf, mask_uncertain = derive_bucket_masks(
                 mask_all, probs, args.confidence_threshold, args.uncertainty_threshold
             )
-            stats.commit(mask_all, mask_conf, mask_uncertain, token_logprobs)
+            per_prompt_layers = stats.commit(mask_all, mask_conf, mask_uncertain, token_logprobs)
+
+            mask_all_cpu = mask_all.detach().cpu()
+            mask_conf_cpu = mask_conf.detach().cpu()
+            mask_uncertain_cpu = mask_uncertain.detach().cpu()
+            probs_cpu = probs.detach().to(torch.float32).cpu()
+            token_logprobs_cpu = token_logprobs.detach().to(torch.float32).cpu()
+
+            for local_idx, prompt_index in enumerate(batch_indices):
+                layer_stats = per_prompt_layers[local_idx] if local_idx < len(per_prompt_layers) else None
+                prompt_metrics[prompt_index] = compute_prompt_metrics(
+                    mask_all_cpu[local_idx],
+                    mask_conf_cpu[local_idx],
+                    mask_uncertain_cpu[local_idx],
+                    probs_cpu[local_idx],
+                    token_logprobs_cpu[local_idx],
+                    layer_stats=layer_stats,
+                )
 
     model_profiles: Dict[str, Dict[str, object]] = {}
+    prompt_metrics_by_model: Dict[str, List[Optional[Dict[str, Any]]]] = {}
 
     if run_vistral and vistral_model is not None and vistral_tokenizer is not None and vistral_stats is not None:
         print("Profiling Vistral activations...", flush=True)
-        run_batches(vistral_model, vistral_tokenizer, vistral_stats, "Vistral batches")
+        vistral_prompt_metrics: List[Optional[Dict[str, Any]]] = [None] * len(prompt_records)
+        prompt_metrics_by_model["vistral"] = vistral_prompt_metrics
+        run_batches(vistral_model, vistral_tokenizer, vistral_stats, "Vistral batches", vistral_prompt_metrics)
         model_profiles["vistral"] = vistral_stats.finalize()
 
     if run_cydonia and cydonia_model is not None and cydonia_tokenizer is not None and cydonia_stats is not None:
         print("Profiling Cydonia activations...", flush=True)
-        run_batches(cydonia_model, cydonia_tokenizer, cydonia_stats, "Cydonia batches")
+        cydonia_prompt_metrics: List[Optional[Dict[str, Any]]] = [None] * len(prompt_records)
+        prompt_metrics_by_model["cydonia"] = cydonia_prompt_metrics
+        run_batches(cydonia_model, cydonia_tokenizer, cydonia_stats, "Cydonia batches", cydonia_prompt_metrics)
         model_profiles["cydonia"] = cydonia_stats.finalize()
 
     if not model_profiles:
@@ -554,6 +765,8 @@ def main() -> None:
     base_dir.mkdir(parents=True, exist_ok=True)
 
     generated_profile_path: Optional[Path] = None
+
+    export_prompt_records(base_dir / "prompts.json", prompt_records, prompt_metrics_by_model)
 
     if "vistral" in model_profiles and "cydonia" in model_profiles:
         vistral_profile = model_profiles["vistral"]
