@@ -17,6 +17,7 @@ edits in the environment.
 
 from __future__ import annotations
 
+from collections.abc import Mapping as MappingABC, Sequence as SequenceABC
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 
@@ -112,9 +113,7 @@ def _coerce_layer_count(value: Any) -> int | None:
     # sequences we fall back to their length, but also attempt to coerce the
     # individual members in case the sequence simply wraps a single numeric
     # entry (e.g. ``[40]``).
-    from collections.abc import Mapping
-
-    if isinstance(value, Mapping):
+    if isinstance(value, MappingABC):
         candidates: list[int] = []
         for item in value.values():
             coerced = _coerce_layer_count(item)
@@ -124,7 +123,7 @@ def _coerce_layer_count(value: Any) -> int | None:
             return max(candidates)
         return None
 
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+    if isinstance(value, SequenceABC) and not isinstance(value, (str, bytes, bytearray)):
         candidates: list[int] = []
         for item in value:
             coerced = _coerce_layer_count(item)
@@ -170,7 +169,74 @@ def _push_patch(config: Any, restorers: list[Callable[[], None]], name: str, val
 
 def _get_layer_count(config: Any) -> int | None:
     value = _resolve_config_value(config, _LAYER_COUNT_CANDIDATES)
-    return _coerce_layer_count(value)
+    coerced = _coerce_layer_count(value)
+    if coerced is not None:
+        return coerced
+
+    visited: set[int] = set()
+    layer_count = _search_layer_count(config, visited)
+    if layer_count is not None:
+        return layer_count
+
+    to_dict = getattr(config, "to_dict", None)
+    if callable(to_dict):
+        try:
+            data = to_dict()
+        except Exception:
+            data = None
+        if isinstance(data, MappingABC):
+            layer_count = _search_layer_count(data, visited)
+            if layer_count is not None:
+                return layer_count
+
+    return None
+
+
+def _search_layer_count(value: Any, visited: set[int]) -> int | None:
+    if value is None:
+        return None
+
+    marker = id(value)
+    if marker in visited:
+        return None
+    visited.add(marker)
+
+    for candidate in _LAYER_COUNT_CANDIDATES:
+        if hasattr(value, candidate):
+            try:
+                attr_value = getattr(value, candidate)
+            except Exception:
+                attr_value = None
+            coerced = _coerce_layer_count(attr_value)
+            if coerced is not None:
+                return coerced
+
+    mapping: Mapping[Any, Any] | None = None
+    if isinstance(value, MappingABC):
+        mapping = value
+    else:
+        dictionary = getattr(value, "__dict__", None)
+        if isinstance(dictionary, MappingABC):
+            mapping = dictionary
+
+    if mapping is not None:
+        for candidate in _LAYER_COUNT_CANDIDATES:
+            if candidate in mapping:
+                coerced = _coerce_layer_count(mapping[candidate])
+                if coerced is not None:
+                    return coerced
+        for item in mapping.values():
+            layer_count = _search_layer_count(item, visited)
+            if layer_count is not None:
+                return layer_count
+
+    if isinstance(value, SequenceABC) and not isinstance(value, (str, bytes, bytearray)):
+        for item in value:
+            layer_count = _search_layer_count(item, visited)
+            if layer_count is not None:
+                return layer_count
+
+    return None
 
 
 def _ensure_layer_attribute(config: Any) -> int | None:
