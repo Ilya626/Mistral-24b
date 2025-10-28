@@ -39,11 +39,12 @@ def _normalise_architectures(value: Any) -> Sequence[str]:
 
 _LAYER_COUNT_CANDIDATES: Sequence[str] = (
     "num_hidden_layers",
-    "num_hidden_layers",
     "num_layers",
     "n_layers",
+    "n_layer",
     "hidden_layers",
     "num_transformer_layers",
+    "num_decoder_layers",
 )
 
 
@@ -103,11 +104,39 @@ def _resolve_config_value(config: Any, names: Sequence[str]) -> Any:
 def _coerce_layer_count(value: Any) -> int | None:
     if value is None:
         return None
+
+    # ``Mistral3Config`` exposes ``num_layers`` as either a scalar, a
+    # mapping, or a sequence depending on the code path that constructed the
+    # config object.  For mappings we look for any positive integer values and
+    # use the maximum – this matches how mergekit interprets layer ranges.  For
+    # sequences we fall back to their length, but also attempt to coerce the
+    # individual members in case the sequence simply wraps a single numeric
+    # entry (e.g. ``[40]``).
+    from collections.abc import Mapping
+
+    if isinstance(value, Mapping):
+        candidates: list[int] = []
+        for item in value.values():
+            coerced = _coerce_layer_count(item)
+            if coerced is not None:
+                candidates.append(coerced)
+        if candidates:
+            return max(candidates)
+        return None
+
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        candidates: list[int] = []
+        for item in value:
+            coerced = _coerce_layer_count(item)
+            if coerced is not None:
+                candidates.append(coerced)
+        if candidates:
+            return max(candidates)
         try:
             value = len(value)
         except Exception:
             return None
+
     try:
         count = int(value)
     except (TypeError, ValueError):
