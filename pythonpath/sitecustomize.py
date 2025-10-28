@@ -168,6 +168,11 @@ def _push_patch(config: Any, restorers: list[Callable[[], None]], name: str, val
     return True
 
 
+def _get_layer_count(config: Any) -> int | None:
+    value = _resolve_config_value(config, _LAYER_COUNT_CANDIDATES)
+    return _coerce_layer_count(value)
+
+
 def _ensure_layer_attribute(config: Any) -> None:
     """Ensure ``num_hidden_layers`` is present on ``config``.
 
@@ -182,8 +187,7 @@ def _ensure_layer_attribute(config: Any) -> None:
 
     if hasattr(config, "num_hidden_layers"):
         return
-    value = _resolve_config_value(config, _LAYER_COUNT_CANDIDATES)
-    layer_count = _coerce_layer_count(value)
+    layer_count = _get_layer_count(config)
     if layer_count is None:
         return
     _set_config_attr(config, "num_hidden_layers", layer_count)
@@ -222,7 +226,19 @@ def _patch_mergekit() -> None:
                 except Exception:
                     pass
 
+    original_num_layers = architecture.ArchitectureInfo.num_layers
+
+    def patched_num_layers(self: Any, config: Any) -> int:
+        try:
+            return original_num_layers(self, config)
+        except AttributeError:
+            layer_count = _get_layer_count(config)
+            if layer_count is not None:
+                return layer_count
+            raise
+
     architecture.get_architecture_info = patched_get_architecture_info
+    architecture.ArchitectureInfo.num_layers = patched_num_layers
     architecture._mistral3_patch_applied = True
 
 
