@@ -201,7 +201,7 @@ def _layer_range_length(
             if candidate == preferred:
                 return candidate
 
-    return candidates[0]
+    return max(candidates)
 
 
 def _push_patch(config: Any, restorers: list[Callable[[], None]], name: str, value: Any) -> bool:
