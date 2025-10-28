@@ -147,6 +147,54 @@ def _coerce_layer_count(value: Any) -> int | None:
     return count if count > 0 else None
 
 
+def _layer_range_length(
+    layer_range: Any, *, preferred: int | None = None
+) -> int | None:
+    if not isinstance(layer_range, SequenceABC):
+        return None
+
+    try:
+        start = int(layer_range[0])
+        stop = int(layer_range[1])
+    except Exception:
+        return None
+
+    step = 1
+    if len(layer_range) >= 3:
+        try:
+            candidate_step = int(layer_range[2])
+            if candidate_step != 0:
+                step = candidate_step
+        except Exception:
+            pass
+
+    if step == 0:
+        return None
+
+    if step > 0:
+        if stop < start:
+            return None
+        inclusive = ((stop - start) // step) + 1
+        exclusive = ((stop - start) // step)
+    else:
+        if stop > start:
+            return None
+        step = -step
+        inclusive = ((start - stop) // step) + 1
+        exclusive = ((start - stop) // step)
+
+    candidates = [value for value in (inclusive, exclusive) if value and value > 0]
+    if not candidates:
+        return None
+
+    if preferred is not None:
+        for candidate in candidates:
+            if candidate == preferred:
+                return candidate
+
+    return max(candidates)
+
+
 def _push_patch(config: Any, restorers: list[Callable[[], None]], name: str, value: Any) -> bool:
     had_attr = hasattr(config, name)
     original: Any = None
@@ -344,6 +392,36 @@ def _patch_mergekit() -> None:
     architecture.get_architecture_info = patched_get_architecture_info
     architecture.ArchitectureInfo.num_layers = patched_num_layers
     architecture._mistral3_patch_applied = True
+
+    try:
+        from mergekit import config as mk_config  # type: ignore
+    except Exception:
+        return
+
+    ModelConfig = getattr(mk_config, "ModelConfig", None)
+    if ModelConfig is None or getattr(ModelConfig, "_mistral3_patch_applied", False):
+        return
+
+    original_layer_count = ModelConfig.layer_count
+
+    def patched_layer_count(self: Any) -> int:
+        config_obj = getattr(self, "config", None)
+        preferred = None
+        if config_obj is not None:
+            preferred = _ensure_layer_attribute(config_obj)
+
+        layer_range = getattr(self, "layer_range", None)
+        range_count = _layer_range_length(layer_range, preferred=preferred)
+        if range_count is not None:
+            return range_count
+
+        if preferred is not None:
+            return preferred
+
+        return original_layer_count(self)
+
+    ModelConfig.layer_count = patched_layer_count
+    ModelConfig._mistral3_patch_applied = True
 
 
 def _main() -> None:
