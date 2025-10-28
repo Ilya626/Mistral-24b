@@ -115,6 +115,7 @@ PYTHON_PACKAGES=(
     "accelerate>=1.2.0"
     "datasets>=2.19.0"
     "huggingface_hub[cli]"
+    "hf_transfer"
     "mergekit[hf]"
     "safetensors>=0.5.2"
     "sentencepiece"

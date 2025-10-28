@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Activation-informed profile builder for gradient SLERP merges.
 
-This script analyses both source models on the grandmaster2 dataset, collects
+This script analyses both source models on the Vikhrmodels/GrandMaster2 dataset, collects
 per-layer activations for self-attention and MLP blocks, and exports a detailed
 SLERP profile (40 layers) together with raw statistics for manual inspection.
 """
@@ -14,7 +14,7 @@ import random
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple, Union
 
 import torch
 from datasets import Dataset, load_dataset
@@ -145,7 +145,7 @@ class ModelStatistics:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build an activation-informed SLERP profile from grandmaster2 prompts")
+    parser = argparse.ArgumentParser(description="Build an activation-informed SLERP profile from GrandMaster2 prompts")
     parser.add_argument("--vistral-model", type=str, default=None, help="Path or identifier of the Vistral model")
     parser.add_argument("--cydonia-model", type=str, default=None, help="Path or identifier of the Cydonia model")
     parser.add_argument(
@@ -161,7 +161,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Model identifier to use as base_model in the generated YAML (defaults to the first profiled model)",
     )
-    parser.add_argument("--dataset-split", type=str, default="train[:256]", help="grandmaster2 split to use")
+    parser.add_argument("--dataset-split", type=str, default="train[:256]", help="GrandMaster2 split to use")
     parser.add_argument("--max-prompts", type=int, default=256, help="Maximum prompts to analyse (<= dataset slice)")
     parser.add_argument(
         "--sample-prompts",
@@ -211,9 +211,29 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _extract_prompt(example: Dict[str, object]) -> str:
+    if "prompt" in example and example["prompt"] is not None:
+        return str(example["prompt"])
+
+    conversation = example.get("conversation")
+    if isinstance(conversation, list) and conversation:
+        user_messages = [
+            turn.get("content")
+            for turn in conversation
+            if isinstance(turn, dict) and turn.get("role") == "user" and turn.get("content")
+        ]
+        if user_messages:
+            return str(user_messages[-1])
+        first = conversation[0]
+        if isinstance(first, dict) and first.get("content"):
+            return str(first["content"])
+
+    raise ValueError("Unable to extract a prompt from dataset example. Expected 'prompt' string or user messages in 'conversation'.")
+
+
 def load_prompts(split: str, max_prompts: int, sample_prompts: int, sample_seed: Optional[int]) -> List[str]:
-    ds: Dataset = load_dataset("grandmaster2", split=split)  # type: ignore[arg-type]
-    prompts = [str(example["prompt"]) for example in ds]
+    ds: Dataset = load_dataset("Vikhrmodels/GrandMaster2", split=split)  # type: ignore[arg-type]
+    prompts = [_extract_prompt(example) for example in ds]
     if max_prompts > 0:
         prompts = prompts[:max_prompts]
     if sample_prompts > 0:
@@ -224,8 +244,15 @@ def load_prompts(split: str, max_prompts: int, sample_prompts: int, sample_seed:
         rng = random.Random(sample_seed)
         prompts = rng.sample(prompts, sample_prompts)
     if not prompts:
-        raise RuntimeError("grandmaster2 slice produced an empty prompt list")
+        raise RuntimeError("GrandMaster2 slice produced an empty prompt list")
     return prompts
+
+
+def _resolve_model_identifier(model_id: str) -> Union[str, Path]:
+    expanded = Path(model_id).expanduser()
+    if expanded.exists():
+        return expanded
+    return model_id
 
 
 def apply_llama3_template(system_prompt: str, user_prompt: str) -> str:
@@ -439,10 +466,11 @@ def main() -> None:
     templated_prompts = prepare_template_prompts(prompts, args.system_prompt)
 
     def load_model_and_tokenizer(model_id: str) -> Tuple[AutoModelForCausalLM, AutoTokenizer, ModelStatistics]:
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=args.trust_remote_code)
+        target = _resolve_model_identifier(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(target, trust_remote_code=args.trust_remote_code)
         ensure_pad_token(tokenizer)
         model = AutoModelForCausalLM.from_pretrained(
-            model_id,
+            target,
             torch_dtype=dtype,
             device_map=device_map,
             trust_remote_code=args.trust_remote_code,
@@ -560,7 +588,7 @@ def main() -> None:
         generated_profile_path = profile_path
 
     metadata = {
-        "dataset": "grandmaster2",
+        "dataset": "Vikhrmodels/GrandMaster2",
         "dataset_split": args.dataset_split,
         "max_prompts": args.max_prompts,
         "sample_prompts": args.sample_prompts,
