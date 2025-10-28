@@ -173,7 +173,7 @@ def _get_layer_count(config: Any) -> int | None:
     return _coerce_layer_count(value)
 
 
-def _ensure_layer_attribute(config: Any) -> None:
+def _ensure_layer_attribute(config: Any) -> int | None:
     """Ensure ``num_hidden_layers`` is present on ``config``.
 
     ``mergekit`` expects modern Mistral configs to expose their layer count
@@ -186,11 +186,20 @@ def _ensure_layer_attribute(config: Any) -> None:
     """
 
     if hasattr(config, "num_hidden_layers"):
-        return
+        try:
+            value = getattr(config, "num_hidden_layers")
+        except Exception:
+            value = None
+        coerced = _coerce_layer_count(value)
+        if coerced:
+            return coerced
+
     layer_count = _get_layer_count(config)
     if layer_count is None:
-        return
-    _set_config_attr(config, "num_hidden_layers", layer_count)
+        return None
+    if _set_config_attr(config, "num_hidden_layers", layer_count):
+        return layer_count
+    return layer_count
 
 
 def _patch_mergekit() -> None:
@@ -229,16 +238,23 @@ def _patch_mergekit() -> None:
     original_num_layers = architecture.ArchitectureInfo.num_layers
 
     def patched_num_layers(self: Any, config: Any) -> int:
+        layer_count = _ensure_layer_attribute(config)
 
-        _ensure_layer_attribute(config)
+        if layer_count is not None:
+            return layer_count
 
-        try:
-            return original_num_layers(self, config)
-        except AttributeError:
-            layer_count = _get_layer_count(config)
-            if layer_count is not None:
-                return layer_count
-            raise
+        if hasattr(config, "num_hidden_layers"):
+            try:
+                return original_num_layers(self, config)
+            except AttributeError:
+                pass
+
+        layer_count = _get_layer_count(config)
+        if layer_count is not None:
+            _set_config_attr(config, "num_hidden_layers", layer_count)
+            return layer_count
+
+        return original_num_layers(self, config)
 
     architecture.get_architecture_info = patched_get_architecture_info
     architecture.ArchitectureInfo.num_layers = patched_num_layers
