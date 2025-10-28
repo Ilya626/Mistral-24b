@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Quick evaluation script for merged models using a prompt dataset.
 
-This helper loads a (sub)set of prompts from the grandmaster2 dataset (or a
+This helper loads a (sub)set of prompts from the GrandMaster2 dataset (or a
 user-provided file/dataset) and generates responses with the supplied model.
 The outputs are saved under ``evaluation_logs`` for later comparison.
 """
@@ -11,7 +11,7 @@ import argparse
 import json
 import time
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Optional
 
 import torch
 from datasets import Dataset, load_dataset
@@ -35,7 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset",
         type=str,
-        default="grandmaster2",
+        default="Vikhrmodels/GrandMaster2",
         help="Dataset name or path (Hugging Face Datasets) used when prompts-file is not provided.",
     )
     parser.add_argument(
@@ -130,6 +130,48 @@ def load_prompts_from_file(path: Path) -> List[str]:
     return prompts
 
 
+def _prompt_from_conversation(conversation: object) -> Optional[str]:
+    if isinstance(conversation, list) and conversation:
+        user_messages = [
+            turn.get("content")
+            for turn in conversation
+            if isinstance(turn, dict) and turn.get("role") == "user" and turn.get("content")
+        ]
+        if user_messages:
+            return str(user_messages[-1])
+        first = conversation[0]
+        if isinstance(first, dict) and first.get("content"):
+            return str(first["content"])
+    return None
+
+
+def _extract_prompt(example: Dict[str, object], prompt_column: str, dataset_name: str) -> str:
+    if prompt_column in example:
+        value = example[prompt_column]
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list):
+            if value and all(isinstance(item, str) for item in value):
+                return "\n".join(value)
+            prompt = _prompt_from_conversation(value)
+            if prompt is not None:
+                return prompt
+        if value is not None:
+            return str(value)
+
+    if prompt_column != "prompt" and "prompt" in example and example["prompt"] is not None:
+        return str(example["prompt"])
+
+    conversation_prompt = _prompt_from_conversation(example.get("conversation"))
+    if conversation_prompt is not None:
+        return conversation_prompt
+
+    raise ValueError(
+        f"Unable to extract a prompt from dataset '{dataset_name}'. "
+        "Provide --prompt-column pointing to a string field or ensure 'conversation' contains user messages."
+    )
+
+
 def load_prompts_from_dataset(
     dataset_name: str,
     split: str,
@@ -137,13 +179,15 @@ def load_prompts_from_dataset(
     max_samples: int,
 ) -> List[str]:
     ds: Dataset = load_dataset(dataset_name, split=split)  # type: ignore[arg-type]
-    if prompt_column not in ds.column_names:
+
+    if prompt_column not in ds.column_names and prompt_column != "prompt":
         raise ValueError(
             f"Column '{prompt_column}' is not present in dataset '{dataset_name}'. Available columns: {ds.column_names}"
         )
 
     num_samples = min(len(ds), max_samples) if max_samples > 0 else len(ds)
-    prompts = [str(example[prompt_column]) for example in ds.select(range(num_samples))]
+    selected = ds.select(range(num_samples)) if num_samples < len(ds) else ds
+    prompts = [_extract_prompt(example, prompt_column, dataset_name) for example in selected]
     return prompts
 
 
