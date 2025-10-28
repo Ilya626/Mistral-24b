@@ -39,11 +39,12 @@ def _normalise_architectures(value: Any) -> Sequence[str]:
 
 _LAYER_COUNT_CANDIDATES: Sequence[str] = (
     "num_hidden_layers",
-    "num_hidden_layers",
     "num_layers",
     "n_layers",
+    "n_layer",
     "hidden_layers",
     "num_transformer_layers",
+    "num_decoder_layers",
 )
 
 
@@ -103,11 +104,39 @@ def _resolve_config_value(config: Any, names: Sequence[str]) -> Any:
 def _coerce_layer_count(value: Any) -> int | None:
     if value is None:
         return None
+
+    # ``Mistral3Config`` exposes ``num_layers`` as either a scalar, a
+    # mapping, or a sequence depending on the code path that constructed the
+    # config object.  For mappings we look for any positive integer values and
+    # use the maximum – this matches how mergekit interprets layer ranges.  For
+    # sequences we fall back to their length, but also attempt to coerce the
+    # individual members in case the sequence simply wraps a single numeric
+    # entry (e.g. ``[40]``).
+    from collections.abc import Mapping
+
+    if isinstance(value, Mapping):
+        candidates: list[int] = []
+        for item in value.values():
+            coerced = _coerce_layer_count(item)
+            if coerced is not None:
+                candidates.append(coerced)
+        if candidates:
+            return max(candidates)
+        return None
+
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        candidates: list[int] = []
+        for item in value:
+            coerced = _coerce_layer_count(item)
+            if coerced is not None:
+                candidates.append(coerced)
+        if candidates:
+            return max(candidates)
         try:
             value = len(value)
         except Exception:
             return None
+
     try:
         count = int(value)
     except (TypeError, ValueError):
@@ -139,6 +168,11 @@ def _push_patch(config: Any, restorers: list[Callable[[], None]], name: str, val
     return True
 
 
+def _get_layer_count(config: Any) -> int | None:
+    value = _resolve_config_value(config, _LAYER_COUNT_CANDIDATES)
+    return _coerce_layer_count(value)
+
+
 def _ensure_layer_attribute(config: Any) -> None:
     """Ensure ``num_hidden_layers`` is present on ``config``.
 
@@ -153,8 +187,7 @@ def _ensure_layer_attribute(config: Any) -> None:
 
     if hasattr(config, "num_hidden_layers"):
         return
-    value = _resolve_config_value(config, _LAYER_COUNT_CANDIDATES)
-    layer_count = _coerce_layer_count(value)
+    layer_count = _get_layer_count(config)
     if layer_count is None:
         return
     _set_config_attr(config, "num_hidden_layers", layer_count)
@@ -193,7 +226,19 @@ def _patch_mergekit() -> None:
                 except Exception:
                     pass
 
+    original_num_layers = architecture.ArchitectureInfo.num_layers
+
+    def patched_num_layers(self: Any, config: Any) -> int:
+        try:
+            return original_num_layers(self, config)
+        except AttributeError:
+            layer_count = _get_layer_count(config)
+            if layer_count is not None:
+                return layer_count
+            raise
+
     architecture.get_architecture_info = patched_get_architecture_info
+    architecture.ArchitectureInfo.num_layers = patched_num_layers
     architecture._mistral3_patch_applied = True
 
 
