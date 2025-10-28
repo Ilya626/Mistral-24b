@@ -6,7 +6,7 @@ dtype: bfloat16
 models:
   - model: &VISTRAL /workspace/Vistral-24B-Instruct
     base_model: *BASE_MODEL
-    layer_range: [0, 39]  # профиль рассчитан на 40 слоёв; проверьте при замене модели
+    layer_range: [0, 40]  # профиль рассчитан на 40 слоёв (верхняя граница исключена); проверьте при замене модели
     # Вклад Vistral: больше внизу, меньше к верху
     parameters:
       weight:
@@ -22,7 +22,7 @@ models:
           value: 0.50
   - model: &CYDONIA /workspace/Cydonia-24B-v4.2.0
     base_model: *BASE_MODEL
-    layer_range: [0, 39]
+    layer_range: [0, 40]
     # Вклад Cydonia: наоборот — меньше внизу, больше к верху
     parameters:
       weight:
