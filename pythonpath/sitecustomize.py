@@ -18,6 +18,9 @@ edits in the environment.
 from __future__ import annotations
 
 from collections.abc import Mapping as MappingABC, Sequence as SequenceABC
+import os
+from pathlib import Path
+import sys
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 
@@ -53,6 +56,48 @@ _NON_NUM_HIDDEN_LAYER_CANDIDATES: Sequence[str] = tuple(
 )
 
 _LAYER_OVERRIDE_ATTR = "_mistral_layer_range_override"
+_LAYER_DEBUG_FLAG = os.environ.get("MISTRAL_LAYER_DEBUG", "")
+
+
+def _normalise_override_key(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        return str(Path(value).expanduser().resolve())
+    except Exception:
+        try:
+            return os.path.abspath(os.path.expanduser(value))
+        except Exception:
+            return value
+
+
+_LAYER_OVERRIDE_MAP: dict[str, int] = {}
+_override_spec = os.environ.get("MISTRAL_LAYER_RANGE_OVERRIDES", "")
+for raw_entry in _override_spec.split(":"):
+    entry = raw_entry.strip()
+    if not entry:
+        continue
+    path, sep, value = entry.partition("=")
+    if not sep:
+        continue
+    try:
+        count = int(value)
+    except Exception:
+        continue
+    key = _normalise_override_key(path)
+    if key is None:
+        continue
+    if count > 0:
+        _LAYER_OVERRIDE_MAP[key] = count
+
+
+def _log_layer_debug(message: str) -> None:
+    if not _LAYER_DEBUG_FLAG:
+        return
+    try:
+        print(f"[mistral-layer-debug] {message}", file=sys.stderr)
+    except Exception:
+        pass
 
 
 def _set_config_attr(config: Any, name: str, value: Any) -> bool:
@@ -321,6 +366,16 @@ def _ensure_layer_attribute(config: Any) -> int | None:
     override_value = getattr(config, _LAYER_OVERRIDE_ATTR, None)
     override_count = _coerce_layer_count(override_value)
 
+    if override_count is None:
+        for candidate_attr in ("_name_or_path", "name_or_path"):
+            candidate_value = getattr(config, candidate_attr, None)
+            if isinstance(candidate_value, str):
+                mapped = _LAYER_OVERRIDE_MAP.get(_normalise_override_key(candidate_value), None)
+                if mapped is not None:
+                    override_count = mapped
+                    _set_config_attr(config, _LAYER_OVERRIDE_ATTR, override_count)
+                    break
+
     existing_value = None
     if hasattr(config, "num_hidden_layers"):
         try:
@@ -421,6 +476,21 @@ def _patch_mergekit() -> None:
 
     original_layer_count = ModelConfig.layer_count
 
+    def _describe_model_config(instance: Any) -> str:
+        for attribute in ("name", "model", "path", "local_path"):
+            if hasattr(instance, attribute):
+                try:
+                    value = getattr(instance, attribute)
+                except Exception:
+                    continue
+                if value:
+                    if isinstance(value, str):
+                        normalised = _normalise_override_key(value)
+                        if normalised is not None:
+                            value = normalised
+                    return f"{attribute}={value!r}"
+        return f"ModelConfig(id={id(instance)})"
+
     def patched_layer_count(self: Any) -> int:
         config_obj = getattr(self, "config", None)
         preferred = None
@@ -429,16 +499,30 @@ def _patch_mergekit() -> None:
 
         layer_range = getattr(self, "layer_range", None)
         range_count = _layer_range_length(layer_range, preferred=preferred)
+        override_hint = None
+        if config_obj is not None:
+            for attr_name in ("_name_or_path", "name_or_path"):
+                candidate = getattr(config_obj, attr_name, None)
+                if isinstance(candidate, str):
+                    normalised = _normalise_override_key(candidate)
+                    if normalised is not None and normalised in _LAYER_OVERRIDE_MAP:
+                        override_hint = _LAYER_OVERRIDE_MAP[normalised]
+                        break
         if range_count is not None:
             if config_obj is not None:
                 _set_config_attr(config_obj, _LAYER_OVERRIDE_ATTR, range_count)
                 _set_config_attr(config_obj, "num_hidden_layers", range_count)
-            return range_count
+            final = range_count
+        elif preferred is not None:
+            final = preferred
+        else:
+            final = original_layer_count(self)
 
-        if preferred is not None:
-            return preferred
-
-        return original_layer_count(self)
+        _log_layer_debug(
+            f"{_describe_model_config(self)} layer_range={layer_range!r} "
+            f"preferred={preferred} range_count={range_count} override_hint={override_hint} final={final}"
+        )
+        return final
 
     ModelConfig.layer_count = patched_layer_count
     ModelConfig._mistral3_patch_applied = True
