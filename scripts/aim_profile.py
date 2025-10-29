@@ -18,7 +18,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 import torch
 from datasets import Dataset, load_dataset
-from huggingface_hub import snapshot_download
+from huggingface_hub import HfApi, snapshot_download
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from tqdm.auto import tqdm
 
@@ -366,6 +366,35 @@ def _sanitize_repo_id(repo_id: str, revision: Optional[str]) -> str:
     return safe_repo
 
 
+def _list_repo_files(repo_id: str, revision: Optional[str]) -> Optional[List[str]]:
+    try:
+        api = HfApi()
+    except Exception:
+        return None
+    try:
+        return api.list_repo_files(repo_id=repo_id, revision=revision)
+    except Exception:
+        return None
+
+
+def _infer_weight_ignore_patterns(repo_id: str, revision: Optional[str]) -> Tuple[str, ...]:
+    files = _list_repo_files(repo_id, revision)
+    if not files:
+        return tuple()
+
+    has_consolidated = any(
+        file_name.startswith("consolidated") and file_name.endswith(".safetensors") for file_name in files
+    )
+    has_shards = any(file_name.startswith("model-") and file_name.endswith(".safetensors") for file_name in files)
+
+    extra: List[str] = []
+    if has_consolidated and has_shards:
+        extra.append("model-*.safetensors")
+    elif has_shards and not has_consolidated:
+        extra.append("consolidated*.safetensors")
+    return tuple(extra)
+
+
 def _ensure_local_model(
     model_id: str,
     cache_dir: Path,
@@ -381,7 +410,18 @@ def _ensure_local_model(
     target_dir = cache_dir / _sanitize_repo_id(repo_id, revision)
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    ignore = tuple(ignore_patterns) if ignore_patterns is not None else None
+    ignore_list: List[str] = []
+    if ignore_patterns is not None:
+        for pattern in ignore_patterns:
+            if pattern not in ignore_list:
+                ignore_list.append(pattern)
+
+    auto_ignore = _infer_weight_ignore_patterns(repo_id, revision)
+    for pattern in auto_ignore:
+        if pattern not in ignore_list:
+            ignore_list.append(pattern)
+
+    ignore = tuple(ignore_list) if ignore_list else None
     snapshot_download(
         repo_id=repo_id,
         revision=revision,
@@ -712,14 +752,40 @@ def main() -> None:
 
     def load_model_and_tokenizer(model_id: str) -> Tuple[AutoModelForCausalLM, AutoTokenizer, ModelStatistics]:
         target = _resolve_model_identifier(model_id, model_cache_dir, ignore_patterns=("*.bin",))
-        tokenizer = AutoTokenizer.from_pretrained(target, trust_remote_code=args.trust_remote_code)
+
+        effective_trust_remote_code = bool(args.trust_remote_code)
+
+        def _load_tokenizer(trust_remote_code: bool) -> AutoTokenizer:
+            return AutoTokenizer.from_pretrained(target, trust_remote_code=trust_remote_code)
+
+        def _load_model(trust_remote_code: bool) -> AutoModelForCausalLM:
+            return AutoModelForCausalLM.from_pretrained(
+                target,
+                torch_dtype=dtype,
+                device_map=device_map,
+                trust_remote_code=trust_remote_code,
+            )
+
+        try:
+            tokenizer = _load_tokenizer(effective_trust_remote_code)
+        except (KeyError, ValueError):
+            if effective_trust_remote_code:
+                raise
+            print("Tokenizer requires trust_remote_code=True; retrying with remote code enabled.", flush=True)
+            effective_trust_remote_code = True
+            tokenizer = _load_tokenizer(True)
         ensure_pad_token(tokenizer)
-        model = AutoModelForCausalLM.from_pretrained(
-            target,
-            torch_dtype=dtype,
-            device_map=device_map,
-            trust_remote_code=args.trust_remote_code,
-        )
+
+        try:
+            model = _load_model(effective_trust_remote_code)
+        except (KeyError, ValueError):
+            if effective_trust_remote_code:
+                raise
+            print("Model config requires trust_remote_code=True; retrying with remote code enabled.", flush=True)
+            effective_trust_remote_code = True
+            tokenizer = _load_tokenizer(True)
+            model = _load_model(True)
+
         if device_map is None:
             model.to(device)
         model.eval()
