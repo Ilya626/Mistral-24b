@@ -15,6 +15,176 @@ CYDONIA_DIR="${CYDONIA_DIR:-/workspace/Cydonia-24B-v4.2.0}"
 BASE_MODEL_DIR="${BASE_MODEL_DIR:-/workspace/Mistral-Small-3.2-24B-Instruct-2506}"
 OFFICIAL_TOKENIZER_REPO="${OFFICIAL_TOKENIZER_REPO:-mistralai/Mistral-Small-3.1-24B-Base-2503}"
 
+copy_tokenizer_sidecars() {
+  local dest="$1"
+  shift
+  local files=(
+    "tokenizer_config.json"
+    "special_tokens_map.json"
+    "tekken.json"
+    "preprocessor_config.json"
+    "processor_config.json"
+  )
+  for src in "$@"; do
+    [[ -d "${src}" ]] || continue
+    for rel in "${files[@]}"; do
+      local candidate="${src}/${rel}"
+      if [[ -f "${candidate}" && ! -f "${dest}/${rel}" ]]; then
+        echo "    ↳ Копирую ${rel} из ${src}"
+        cp "${candidate}" "${dest}/${rel}"
+      fi
+    done
+  done
+}
+
+validate_union_tokenizer() {
+  local dest="$1"
+  shift
+  python3 - "$dest" "$@" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+
+def _load_token_sets(root: Path) -> tuple[set[str], set[str]]:
+    vocab: set[str] = set()
+    specials: set[str] = set()
+
+    def _consume(obj: object) -> None:
+        if isinstance(obj, str):
+            specials.add(obj)
+        elif isinstance(obj, list):
+            for item in obj:
+                if isinstance(item, str):
+                    specials.add(item)
+        elif isinstance(obj, dict):
+            value = obj.get("content") or obj.get("token")
+            if isinstance(value, str):
+                specials.add(value)
+
+    tok_json = root / "tokenizer.json"
+    if tok_json.exists():
+        try:
+            with tok_json.open("r", encoding="utf-8") as handle:
+                data = json.load(handle)
+        except Exception as exc:  # pragma: no cover - safety guard
+            raise SystemExit(f"Ошибка: не удалось прочитать {tok_json}: {exc}") from exc
+
+        model = data.get("model")
+        if isinstance(model, dict):
+            vocab_map = model.get("vocab")
+            if isinstance(vocab_map, dict):
+                vocab.update(k for k in vocab_map.keys() if isinstance(k, str))
+
+        for token in data.get("added_tokens", []):
+            if not isinstance(token, dict):
+                continue
+            content = token.get("content")
+            if isinstance(content, str):
+                vocab.add(content)
+                if token.get("special", False):
+                    specials.add(content)
+
+    config = root / "tokenizer_config.json"
+    if config.exists():
+        try:
+            with config.open("r", encoding="utf-8") as handle:
+                cfg = json.load(handle)
+        except Exception as exc:  # pragma: no cover
+            raise SystemExit(f"Ошибка: не удалось прочитать {config}: {exc}") from exc
+
+        special_map = cfg.get("special_tokens_map")
+        if isinstance(special_map, dict):
+            for value in special_map.values():
+                _consume(value)
+
+        for key in (
+            "bos_token",
+            "eos_token",
+            "unk_token",
+            "pad_token",
+            "cls_token",
+            "sep_token",
+            "mask_token",
+        ):
+            _consume(cfg.get(key))
+
+    special_json = root / "special_tokens_map.json"
+    if special_json.exists():
+        try:
+            with special_json.open("r", encoding="utf-8") as handle:
+                data = json.load(handle)
+        except Exception as exc:  # pragma: no cover
+            raise SystemExit(f"Ошибка: не удалось прочитать {special_json}: {exc}") from exc
+
+        if isinstance(data, dict):
+            for value in data.values():
+                _consume(value)
+
+    return vocab, specials
+
+
+dest = Path(sys.argv[1])
+sources = [Path(p) for p in sys.argv[2:] if Path(p).is_dir()]
+
+tokenizer_json = dest / "tokenizer.json"
+if not tokenizer_json.exists():
+    raise SystemExit(
+        f"Ошибка: {tokenizer_json} не найден. Mergekit должен сгенерировать объединённый tokenizer.json."
+    )
+
+spm = dest / "tokenizer.model"
+if not spm.exists():
+    sys.stderr.write(
+        "[!] Предупреждение: tokenizer.model отсутствует в целевой директории — "
+        "убедитесь, что инструменты квантования могут работать с tokenizer.json.\n"
+    )
+
+dest_vocab, dest_special = _load_token_sets(dest)
+if not dest_vocab:
+    raise SystemExit(
+        "Ошибка: не удалось извлечь словарь из объединённого токенайзера. Проверьте tokenizer.json."
+    )
+
+problems = False
+for src in sources:
+    try:
+        src_vocab, src_special = _load_token_sets(src)
+    except SystemExit as exc:
+        sys.stderr.write(f"[!] Предупреждение: пропускаю проверку {src}: {exc}\n")
+        continue
+
+    if not src_vocab:
+        sys.stderr.write(
+            f"[!] Предупреждение: не удалось извлечь словарь из {src}/tokenizer.json — пропускаю проверку.\n"
+        )
+        continue
+
+    missing = [token for token in src_vocab if token not in dest_vocab]
+    if missing:
+        problems = True
+        sample = ", ".join(missing[:5])
+        sys.stderr.write(
+            f"Ошибка: объединённый токенайзер не содержит {len(missing)} токенов из {src}. "
+            f"Примеры: {sample}\n"
+        )
+
+    special_missing = [token for token in src_special if token and token not in dest_special]
+    if special_missing:
+        problems = True
+        sys.stderr.write(
+            f"Ошибка: отсутствуют специальные токены из {src}: "
+            + ", ".join(special_missing[:5])
+            + "\n"
+        )
+
+if problems:
+    raise SystemExit(1)
+
+print("✓ Объединённый токенайзер содержит словари всех исходных моделей.")
+PY
+}
+
 ensure_path_in_config() {
   local label="$1"
   local path="$2"
@@ -233,8 +403,14 @@ require_any_file "базовой модели" "${BASE_MODEL_DIR}" "mistralai/Mi
   "tokenizer.model" "tokenizer.json"
 
 echo ">>> Запускаю mergekit (dare_ties + slerp)..."
+# Не передаём --copy-tokenizer, чтобы mergekit сформировал объединённый словарь
+# Vistral + Cydonia, как указано в конфиге.
 mergekit-yaml "${CFG}" "${OUT}" \
-  --cuda --copy-tokenizer --clone-tensors
+  --cuda --clone-tensors
+
+echo ">>> Синхронизирую служебные файлы токенайзера..."
+copy_tokenizer_sidecars "${OUT}" "${VISTRAL_DIR}" "${CYDONIA_DIR}" "${BASE_MODEL_DIR}"
+validate_union_tokenizer "${OUT}" "${VISTRAL_DIR}" "${CYDONIA_DIR}" "${BASE_MODEL_DIR}"
 
 echo "--- Готово ---"
 echo "Результат сохранён в: ${OUT}"
