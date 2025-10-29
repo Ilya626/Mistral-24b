@@ -452,9 +452,18 @@ def _patch_sentencepiece_loader() -> None:
         return
 
     def patched_load(self: Any, model_file: Any) -> Any:  # type: ignore[override]
+        _SUCCESS = object()
+
+        def _wrap_result(value: Any) -> Any:
+            # ``SentencePieceProcessor.LoadFromFile`` returns ``None`` on success.
+            # We propagate a sentinel upwards so recursive callers can
+            # differentiate between "handled" and "keep searching" without
+            # altering the public return contract (which should remain ``None``).
+            return _SUCCESS if value is None else value
+
         def _load_from_bytes(data: bytes | bytearray | memoryview) -> Any:
             try:
-                return self.LoadFromSerializedProto(bytes(data))
+                return _wrap_result(self.LoadFromSerializedProto(bytes(data)))
             except Exception:  # pragma: no cover - defensive path
                 return None
 
@@ -480,13 +489,13 @@ def _patch_sentencepiece_loader() -> None:
 
             if isinstance(candidate, str):
                 try:
-                    return original_load(self, candidate)
+                    return _wrap_result(original_load(self, candidate))
                 except Exception:
                     return None
 
             if isinstance(candidate, os.PathLike):
                 try:
-                    return original_load(self, os.fspath(candidate))
+                    return _wrap_result(original_load(self, os.fspath(candidate)))
                 except Exception:
                     return None
 
@@ -550,7 +559,7 @@ def _patch_sentencepiece_loader() -> None:
 
             if isinstance(as_str, str) and as_str:
                 try:
-                    return original_load(self, as_str)
+                    return _wrap_result(original_load(self, as_str))
                 except TypeError:
                     pass
                 except Exception:
@@ -559,6 +568,8 @@ def _patch_sentencepiece_loader() -> None:
             return None
 
         result = _attempt_load(model_file)
+        if result is _SUCCESS:
+            return None
         if result is not None:
             return result
 
