@@ -424,6 +424,53 @@ def _ensure_layer_attribute(config: Any) -> int | None:
     return layer_count
 
 
+def _coerce_positive_int(value: Any) -> int | None:
+    try:
+        candidate = int(value)
+    except Exception:
+        return None
+    return candidate if candidate > 0 else None
+
+
+def _ensure_vocab_size_attribute(config: Any) -> int | None:
+    existing = _coerce_positive_int(getattr(config, "vocab_size", None))
+    if existing is not None:
+        return existing
+
+    text_config = getattr(config, "text_config", None)
+    nested = None
+    if text_config is not None:
+        nested = _ensure_vocab_size_attribute(text_config)
+
+    if nested is None:
+        config_dict = getattr(config, "__dict__", None)
+        if isinstance(config_dict, MappingABC):
+            candidate = config_dict.get("vocab_size")
+            nested = _coerce_positive_int(candidate)
+            if nested is None and "text_config" in config_dict:
+                nested = _ensure_vocab_size_attribute(config_dict["text_config"])
+
+    if nested is None:
+        to_dict = getattr(config, "to_dict", None)
+        if callable(to_dict):
+            try:
+                data = to_dict()
+            except Exception:
+                data = None
+            if isinstance(data, MappingABC):
+                candidate = data.get("vocab_size")
+                nested = _coerce_positive_int(candidate)
+                if nested is None and "text_config" in data:
+                    nested = _ensure_vocab_size_attribute(data["text_config"])
+
+    if nested is not None:
+        if _set_config_attr(config, "vocab_size", nested):
+            return nested
+        return nested
+
+    return None
+
+
 def _import_first_available(candidates: Sequence[tuple[str, str]]) -> tuple[type | None, str | None]:
     for module_name, attr_name in candidates:
         try:
@@ -883,6 +930,7 @@ def _patch_mergekit() -> None:
             if alias:
                 _push_patch(config, restorers, "architectures", (alias,))
             _ensure_layer_attribute(config)
+            _ensure_vocab_size_attribute(config)
             return original_get_architecture_info(config)
         finally:
             while restorers:
@@ -915,6 +963,54 @@ def _patch_mergekit() -> None:
 
     architecture.get_architecture_info = patched_get_architecture_info
     architecture.ArchitectureInfo.num_layers = patched_num_layers
+
+    try:
+        from mergekit.tokenizer import embed as mk_embed  # type: ignore
+    except Exception:
+        mk_embed = None
+
+    if mk_embed is not None and not getattr(mk_embed.PermutedEmbeddings, "_mistral_perm_patch", False):
+        original_permuted_execute = mk_embed.PermutedEmbeddings.execute
+
+        def patched_permuted_execute(self: Any, tokenizer_info: Any, tensors: Mapping[Any, Any]) -> Any:
+            if not hasattr(tokenizer_info, "permutations"):
+                return original_permuted_execute(self, tokenizer_info, tensors)
+
+            sanitized: dict[Any, dict[int, int]] = {}
+            for model, mapping in tokenizer_info.permutations.items():
+                limit = None
+                tensor = tensors.get(model)
+                if tensor is not None:
+                    shape = getattr(tensor, "shape", None)
+                    if isinstance(shape, SequenceABC) and shape:
+                        try:
+                            limit = int(shape[0])
+                        except Exception:
+                            limit = None
+                sanitized_mapping: dict[int, int] = {}
+                for token_id, idx in mapping.items():
+                    if limit is not None and idx >= limit:
+                        sanitized_mapping[token_id] = -1
+                    else:
+                        sanitized_mapping[token_id] = idx
+                sanitized[model] = sanitized_mapping
+
+            original_permutations = tokenizer_info.permutations
+            tokenizer_info.permutations = sanitized
+            try:
+                return original_permuted_execute(self, tokenizer_info, tensors)
+            finally:
+                try:
+                    tokenizer_info.permutations = original_permutations
+                except Exception:
+                    pass
+
+        mk_embed.PermutedEmbeddings.execute = patched_permuted_execute  # type: ignore[assignment]
+        try:
+            setattr(mk_embed.PermutedEmbeddings, "_mistral_perm_patch", True)
+        except Exception:
+            pass
+
     architecture._mistral3_patch_applied = True
 
     try:
@@ -987,6 +1083,10 @@ def _main() -> None:
 
 
 _main()
+
+
+
+
 
 
 
