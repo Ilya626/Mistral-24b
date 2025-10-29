@@ -33,14 +33,23 @@ ensure_path_in_config "Cydonia" "${CYDONIA_DIR}"
 ensure_path_in_config "базовой модели" "${BASE_MODEL_DIR}"
 
 verify_layer_ranges() {
-  python3 - "$CFG" <<'PY'
+  local overrides
+  if ! overrides="$(python3 - "$CFG" "$BASE_MODEL_DIR" <<'PY'
 import ast
 import sys
 from pathlib import Path
 
 config_path = Path(sys.argv[1])
+base_model_path = Path(sys.argv[2])
 expected = 40
 current_model = None
+overrides: list[str] = []
+
+def _normalise_model(value: str | None) -> str:
+    if not value:
+        return ""
+    return str(Path(value).expanduser().resolve())
+
 
 with config_path.open("r", encoding="utf-8") as handle:
     for raw_line in handle:
@@ -115,8 +124,23 @@ with config_path.open("r", encoding="utf-8") as handle:
                 f"layer_range для {current_model or 'неизвестной модели'} охватывает {span} слоёв (ожидалось {expected})."
             )
 
-print("Проверка диапазонов слоёв прошла успешно.")
+        normalised_model = _normalise_model(current_model)
+        if not normalised_model:
+            raise SystemExit("Обнаружен layer_range без соответствующего model")
+
+        overrides.append(f"{normalised_model}={span}")
+
+base_model_override = f"{_normalise_model(str(base_model_path))}={expected}"
+if base_model_override not in overrides:
+    overrides.append(base_model_override)
+
+sys.stderr.write("Проверка диапазонов слоёв прошла успешно.\n")
+print(":".join(overrides))
 PY
+)"; then
+    exit 1
+  fi
+  export MISTRAL_LAYER_RANGE_OVERRIDES="${overrides}"
 }
 
 verify_layer_ranges
