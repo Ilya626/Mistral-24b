@@ -452,44 +452,105 @@ def _patch_sentencepiece_loader() -> None:
         return
 
     def patched_load(self: Any, model_file: Any) -> Any:  # type: ignore[override]
-        candidate = model_file
+        def _load_from_bytes(data: bytes | bytearray | memoryview) -> Any:
+            try:
+                return self.LoadFromSerializedProto(bytes(data))
+            except Exception:  # pragma: no cover - defensive path
+                return None
 
-        if isinstance(candidate, (str, bytes)):
-            if isinstance(candidate, bytes):
+        preferred_mapping_keys = (
+            "model",
+            "path",
+            "sentencepiece",
+            "sentencepiece_model",
+            "spm",
+            "file",
+        )
+
+        visited: set[int] = set()
+
+        def _attempt_load(candidate: Any) -> Any:
+            candidate_id = id(candidate)
+            if candidate_id in visited:
+                return None
+            visited.add(candidate_id)
+
+            if candidate is None:
+                return None
+
+            if isinstance(candidate, str):
                 try:
-                    return self.LoadFromSerializedProto(candidate)
+                    return original_load(self, candidate)
+                except Exception:
+                    return None
+
+            if isinstance(candidate, os.PathLike):
+                try:
+                    return original_load(self, os.fspath(candidate))
+                except Exception:
+                    return None
+
+            if isinstance(candidate, (bytes, bytearray, memoryview)):
+                return _load_from_bytes(candidate)
+
+            if hasattr(candidate, "read") and callable(candidate.read):
+                try:
+                    data = candidate.read()
+                except Exception:
+                    data = None
+                if isinstance(data, (bytes, bytearray, memoryview)):
+                    return _load_from_bytes(data)
+                return None
+
+            if isinstance(candidate, MappingABC):
+                for key in preferred_mapping_keys:
+                    if key not in candidate:
+                        continue
+                    result = _attempt_load(candidate[key])
+                    if result is not None:
+                        return result
+                for value in candidate.values():
+                    result = _attempt_load(value)
+                    if result is not None:
+                        return result
+                return None
+
+            if isinstance(candidate, SequenceABC) and not isinstance(
+                candidate,
+                (bytes, bytearray, memoryview, str),
+            ):
+                for item in candidate:
+                    result = _attempt_load(item)
+                    if result is not None:
+                        return result
+                return None
+
+            if hasattr(candidate, "__bytes__"):
+                try:
+                    data = bytes(candidate)
                 except Exception:
                     pass
-            else:
-                return original_load(self, candidate)
+                else:
+                    if isinstance(data, (bytes, bytearray)):
+                        return _load_from_bytes(data)
 
-        if isinstance(candidate, os.PathLike):
             try:
-                return original_load(self, os.fspath(candidate))
+                as_str = str(candidate)
             except Exception:
-                pass
+                as_str = None
 
-        if hasattr(candidate, "read") and callable(candidate.read):
-            try:
-                data = candidate.read()
-            except Exception:
-                data = None
-            if isinstance(data, (bytes, bytearray)):
-                try:
-                    return self.LoadFromSerializedProto(bytes(data))
-                except Exception:
-                    pass
+            if isinstance(as_str, str) and as_str:
+                if os.path.exists(as_str):
+                    try:
+                        return original_load(self, as_str)
+                    except Exception:
+                        return None
 
-        try:
-            coerced = str(candidate)
-        except Exception:
-            coerced = None
+            return None
 
-        if isinstance(coerced, str):
-            try:
-                return original_load(self, coerced)
-            except Exception:
-                pass
+        result = _attempt_load(model_file)
+        if result is not None:
+            return result
 
         raise TypeError("not a string")
 
