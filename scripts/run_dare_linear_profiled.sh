@@ -73,6 +73,43 @@ check_any_file() {
   exit 1
 }
 
+sync_base_tokenizer() {
+  if ls "${BASE_MODEL_DIR}"/tokenizer.* >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local source=""
+  for candidate in "${VISTRAL_DIR}" "${CYDONIA_DIR}"; do
+    if ls "${candidate}"/tokenizer.* >/dev/null 2>&1; then
+      source="${candidate}"
+      break
+    fi
+  done
+
+  if [[ -z "${source}" ]]; then
+    echo "Ошибка: не удалось найти токенайзер ни в одном из источников (Vistral/Cydonia)." >&2
+    echo "Загрузите токенайзер вручную и повторите запуск." >&2
+    exit 1
+  fi
+
+  echo "[!]  Базовая модель без токенайзера. Копирую из ${source}."
+  local files=(
+    tokenizer.model
+    tokenizer.json
+    tokenizer_config.json
+    special_tokens_map.json
+    vocab.json
+    merges.txt
+  )
+  for rel in "${files[@]}"; do
+    local src_path="${source}/${rel}"
+    local dst_path="${BASE_MODEL_DIR}/${rel}"
+    if [[ -f "${src_path}" && ! -f "${dst_path}" ]]; then
+      cp "${src_path}" "${dst_path}"
+    fi
+  done
+}
+
 ensure_path_in_config "Vistral" "${VISTRAL_DIR}"
 ensure_path_in_config "Cydonia" "${CYDONIA_DIR}"
 ensure_path_in_config "базовой модели" "${BASE_MODEL_DIR}"
@@ -202,6 +239,8 @@ huggingface-cli download TheDrummer/Cydonia-24B-v4.2.0 \
 huggingface-cli download mistralai/Mistral-Small-3.2-24B-Instruct-2506 \
   --local-dir "${BASE_MODEL_DIR}" --exclude "*.bin" --exclude "consolidated.safetensors"
 
+sync_base_tokenizer
+
 check_required_files "Vistral" "${VISTRAL_DIR}" "Vikhrmodels/Vistral-24B-Instruct" \
   "config.json"
 check_any_file "Vistral" "${VISTRAL_DIR}" "Vikhrmodels/Vistral-24B-Instruct" \
@@ -221,5 +260,8 @@ mergekit-yaml "${CFG}" "${OUT}" \
 
 echo "--- Готово ---"
 echo "Результат сохранён в: ${OUT}"
+
+
+
 
 
