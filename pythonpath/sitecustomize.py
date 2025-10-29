@@ -578,21 +578,36 @@ def _patch_sentencepiece_loader() -> None:
             return result
 
         fallback = model_file
+        if fallback is None:
+            raise TypeError("not a string")
+
         try:
-            fallback = os.fspath(model_file)  # type: ignore[arg-type]
+            fallback = os.fspath(fallback)  # type: ignore[arg-type]
         except TypeError:
-            fallback = str(model_file)
+            if isinstance(fallback, (bytes, bytearray)):
+                try:
+                    fallback = fallback.decode("utf-8")
+                except Exception:
+                    fallback = fallback.decode("utf-8", errors="ignore")
+            else:
+                fallback = str(fallback)
         except Exception:
             pass
 
-        if isinstance(fallback, bytes):
+        if not isinstance(fallback, (str, bytes, bytearray)):
+            raise TypeError("not a string")
+
+        if isinstance(fallback, (bytes, bytearray)):
             try:
                 fallback = fallback.decode("utf-8")
             except Exception:
                 fallback = fallback.decode("utf-8", errors="ignore")
 
+        if not fallback:
+            raise TypeError("not a string")
+
         try:
-            return original_load(self, str(fallback))
+            return original_load(self, fallback)
         except TypeError:
             raise TypeError("not a string")
 
@@ -972,5 +987,6 @@ def _main() -> None:
 
 
 _main()
+
 
 

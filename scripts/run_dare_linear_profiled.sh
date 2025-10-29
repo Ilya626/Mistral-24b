@@ -28,6 +28,31 @@ ensure_path_in_config() {
   fi
 }
 
+check_required_files() {
+  local label="$1"
+  local root="$2"
+  local repo="$3"
+  shift 3
+
+  local missing=0
+  local files=($@)
+
+  for rel in "${files[@]}"; do
+    local candidate="${root}/${rel}"
+    if [[ ! -f "${candidate}" ]]; then
+      echo "Ошибка: для ${label} не найден ${rel} (ожидался ${candidate})." >&2
+      missing=1
+    fi
+  done
+
+  if (( missing )); then
+    echo "Подсказка: повторите загрузку: huggingface-cli download ${repo} --local-dir \"${root}\" --force-download" >&2
+    exit 1
+  fi
+
+  echo "✓ ${label}: проверка артефактов пройдена."
+}
+
 ensure_path_in_config "Vistral" "${VISTRAL_DIR}"
 ensure_path_in_config "Cydonia" "${CYDONIA_DIR}"
 ensure_path_in_config "базовой модели" "${BASE_MODEL_DIR}"
@@ -156,6 +181,13 @@ huggingface-cli download TheDrummer/Cydonia-24B-v4.2.0 \
   --local-dir "${CYDONIA_DIR}"
 huggingface-cli download mistralai/Mistral-Small-3.2-24B-Instruct-2506 \
   --local-dir "${BASE_MODEL_DIR}" --exclude "*.bin" --exclude "consolidated.safetensors"
+
+check_required_files "Vistral" "${VISTRAL_DIR}" "Vikhrmodels/Vistral-24B-Instruct" \
+  "config.json" "tokenizer.model"
+check_required_files "Cydonia" "${CYDONIA_DIR}" "TheDrummer/Cydonia-24B-v4.2.0" \
+  "config.json" "tokenizer.model"
+check_required_files "базовой модели" "${BASE_MODEL_DIR}" "mistralai/Mistral-Small-3.2-24B-Instruct-2506" \
+  "config.json" "tokenizer.model"
 
 echo ">>> Запускаю mergekit (dare_linear + профили)..."
 mergekit-yaml "${CFG}" "${OUT}" \
