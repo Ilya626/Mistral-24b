@@ -18,6 +18,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 import torch
 from datasets import Dataset, load_dataset
+from huggingface_hub import snapshot_download
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from tqdm.auto import tqdm
 
@@ -29,6 +30,7 @@ LLAMA3_EOH = "<|end_header_id|>"
 BUCKETS = ("all", "confident", "uncertain")
 KIND_KEYS = ("self_attn", "mlp")
 EPS = 1e-8
+DEFAULT_MODEL_CACHE_DIR = "artifacts/model_cache"
 
 
 @dataclass
@@ -261,6 +263,7 @@ def parse_args() -> argparse.Namespace:
         help="Torch dtype for model weights",
     )
     parser.add_argument("--trust-remote-code", action="store_true", help="Forward trust_remote_code to transformers loaders")
+    parser.add_argument("--model-cache-dir", type=str, default=DEFAULT_MODEL_CACHE_DIR, help="Directory where remote models will be snapshot-downloaded for reuse")
     return parser.parse_args()
 
 
@@ -348,11 +351,61 @@ def load_prompt_records(
     return records
 
 
-def _resolve_model_identifier(model_id: str) -> Union[str, Path]:
+def _split_repo_revision(model_id: str) -> Tuple[str, Optional[str]]:
+    if "@" in model_id:
+        repo_id, revision = model_id.split("@", 1)
+        return repo_id, revision
+    return model_id, None
+
+
+def _sanitize_repo_id(repo_id: str, revision: Optional[str]) -> str:
+    safe_repo = repo_id.replace("/", "__")
+    if revision:
+        safe_revision = revision.replace("/", "__")
+        return f"{safe_repo}__{safe_revision}"
+    return safe_repo
+
+
+def _ensure_local_model(
+    model_id: str,
+    cache_dir: Path,
+    *,
+    ignore_patterns: Iterable[str] | None = None,
+) -> Path | str:
     expanded = Path(model_id).expanduser()
     if expanded.exists():
         return expanded
-    return model_id
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    repo_id, revision = _split_repo_revision(model_id)
+    target_dir = cache_dir / _sanitize_repo_id(repo_id, revision)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    ignore = tuple(ignore_patterns) if ignore_patterns is not None else None
+    snapshot_download(
+        repo_id=repo_id,
+        revision=revision,
+        cache_dir=cache_dir,
+        local_dir=target_dir,
+        local_dir_use_symlinks=False,
+        ignore_patterns=ignore,
+    )
+    return target_dir
+
+
+def _resolve_model_identifier(
+    model_id: str,
+    cache_dir: Optional[Path],
+    *,
+    ignore_patterns: Iterable[str] | None = None,
+) -> Union[str, Path]:
+    if cache_dir is None:
+        expanded = Path(model_id).expanduser()
+        if expanded.exists():
+            return expanded
+        return model_id
+    return _ensure_local_model(model_id, cache_dir, ignore_patterns=ignore_patterns)
+
 
 
 def apply_llama3_template(system_prompt: str, user_prompt: str) -> str:
@@ -633,6 +686,12 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device_map = "auto" if torch.cuda.is_available() else None
 
+    model_cache_dir: Optional[Path]
+    if args.model_cache_dir:
+        model_cache_dir = Path(args.model_cache_dir).expanduser().resolve()
+    else:
+        model_cache_dir = None
+
     if args.vistral_model is None and args.cydonia_model is None:
         raise RuntimeError("At least one model must be provided for profiling")
 
@@ -652,7 +711,7 @@ def main() -> None:
     indexed_prompts = list(enumerate(templated_prompts))
 
     def load_model_and_tokenizer(model_id: str) -> Tuple[AutoModelForCausalLM, AutoTokenizer, ModelStatistics]:
-        target = _resolve_model_identifier(model_id)
+        target = _resolve_model_identifier(model_id, model_cache_dir, ignore_patterns=("*.bin",))
         tokenizer = AutoTokenizer.from_pretrained(target, trust_remote_code=args.trust_remote_code)
         ensure_pad_token(tokenizer)
         model = AutoModelForCausalLM.from_pretrained(
