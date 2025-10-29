@@ -18,6 +18,9 @@ edits in the environment.
 from __future__ import annotations
 
 from collections.abc import Mapping as MappingABC, Sequence as SequenceABC
+import os
+from pathlib import Path
+import sys
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 
@@ -53,6 +56,61 @@ _NON_NUM_HIDDEN_LAYER_CANDIDATES: Sequence[str] = tuple(
 )
 
 _LAYER_OVERRIDE_ATTR = "_mistral_layer_range_override"
+_LAYER_DEBUG_FLAG = os.environ.get("MISTRAL_LAYER_DEBUG", "")
+
+
+_TOKENIZER_SLOW_CANDIDATES: Sequence[tuple[str, str]] = (
+    ("transformers.models.mistral3.tokenization_mistral3", "Mistral3Tokenizer"),
+    ("transformers.models.mistral.tokenization_mistral", "MistralTokenizer"),
+    ("transformers.models.llama.tokenization_llama", "LlamaTokenizer"),
+)
+
+_TOKENIZER_FAST_CANDIDATES: Sequence[tuple[str, str]] = (
+    ("transformers.models.mistral3.tokenization_mistral3_fast", "Mistral3TokenizerFast"),
+    ("transformers.models.mistral.tokenization_mistral_fast", "MistralTokenizerFast"),
+    ("transformers.models.llama.tokenization_llama_fast", "LlamaTokenizerFast"),
+)
+
+
+def _normalise_override_key(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        return str(Path(value).expanduser().resolve())
+    except Exception:
+        try:
+            return os.path.abspath(os.path.expanduser(value))
+        except Exception:
+            return value
+
+
+_LAYER_OVERRIDE_MAP: dict[str, int] = {}
+_override_spec = os.environ.get("MISTRAL_LAYER_RANGE_OVERRIDES", "")
+for raw_entry in _override_spec.split(":"):
+    entry = raw_entry.strip()
+    if not entry:
+        continue
+    path, sep, value = entry.partition("=")
+    if not sep:
+        continue
+    try:
+        count = int(value)
+    except Exception:
+        continue
+    key = _normalise_override_key(path)
+    if key is None:
+        continue
+    if count > 0:
+        _LAYER_OVERRIDE_MAP[key] = count
+
+
+def _log_layer_debug(message: str) -> None:
+    if not _LAYER_DEBUG_FLAG:
+        return
+    try:
+        print(f"[mistral-layer-debug] {message}", file=sys.stderr)
+    except Exception:
+        pass
 
 
 def _set_config_attr(config: Any, name: str, value: Any) -> bool:
@@ -321,6 +379,16 @@ def _ensure_layer_attribute(config: Any) -> int | None:
     override_value = getattr(config, _LAYER_OVERRIDE_ATTR, None)
     override_count = _coerce_layer_count(override_value)
 
+    if override_count is None:
+        for candidate_attr in ("_name_or_path", "name_or_path"):
+            candidate_value = getattr(config, candidate_attr, None)
+            if isinstance(candidate_value, str):
+                mapped = _LAYER_OVERRIDE_MAP.get(_normalise_override_key(candidate_value), None)
+                if mapped is not None:
+                    override_count = mapped
+                    _set_config_attr(config, _LAYER_OVERRIDE_ATTR, override_count)
+                    break
+
     existing_value = None
     if hasattr(config, "num_hidden_layers"):
         try:
@@ -350,6 +418,207 @@ def _ensure_layer_attribute(config: Any) -> int | None:
     if _set_config_attr(config, "num_hidden_layers", layer_count):
         return layer_count
     return layer_count
+
+
+def _import_first_available(candidates: Sequence[tuple[str, str]]) -> tuple[type | None, str | None]:
+    for module_name, attr_name in candidates:
+        try:
+            module = __import__(module_name, fromlist=[attr_name])
+        except Exception:
+            module = None
+        if module is None:
+            continue
+        candidate = getattr(module, attr_name, None)
+        if candidate is not None:
+            return candidate, attr_name
+    return None, None
+
+
+def _patch_transformers_tokenizers() -> None:
+    try:
+        from transformers.models.mistral3 import configuration_mistral3  # type: ignore
+    except Exception:
+        return
+
+    config_cls = getattr(configuration_mistral3, "Mistral3Config", None)
+    if config_cls is None:
+        return
+
+    model_type = getattr(config_cls, "model_type", None)
+    if not isinstance(model_type, str) or not model_type:
+        model_type = "mistral3"
+
+    slow_cls, slow_name = _import_first_available(_TOKENIZER_SLOW_CANDIDATES)
+    fast_cls, fast_name = _import_first_available(_TOKENIZER_FAST_CANDIDATES)
+
+    if slow_cls is None and fast_cls is None:
+        return
+
+    try:
+        from transformers.models.auto import auto_factory as tf_auto_factory  # type: ignore
+        from transformers.models.auto import configuration_auto, tokenization_auto  # type: ignore
+    except Exception:
+        tf_auto_factory = configuration_auto = tokenization_auto = None
+
+    applied = False
+
+    if tokenization_auto is not None:
+        mapping_names = getattr(tokenization_auto, "TOKENIZER_MAPPING_NAMES", None)
+        if isinstance(mapping_names, Mapping):
+            existing = mapping_names.get(model_type)
+            if existing is not None:
+                applied = True
+            if existing is None or existing == (None, None):
+                mapping_names[model_type] = (slow_name, fast_name)
+                applied = True
+            else:
+                slow_entry, fast_entry = existing
+                if slow_entry is None and slow_name is not None:
+                    slow_entry = slow_name
+                    applied = True
+                if fast_entry is None and fast_name is not None:
+                    fast_entry = fast_name
+                    applied = True
+                mapping_names[model_type] = (slow_entry, fast_entry)
+
+        mapping = getattr(tokenization_auto, "TOKENIZER_MAPPING", None)
+        if mapping is not None:
+            try:
+                mapping[config_cls]
+                applied = True
+            except KeyError:
+                try:
+                    register = getattr(mapping, "register", None)
+                    if callable(register):
+                        register(config_cls, slow_cls, fast_cls)
+                        applied = True
+                except Exception:
+                    pass
+
+        if (
+            tf_auto_factory is not None
+            and configuration_auto is not None
+            and hasattr(tf_auto_factory, "_LazyAutoMapping")
+        ):
+            LazyMapping = getattr(tf_auto_factory, "_LazyAutoMapping")
+            try:
+                tokenization_auto.TOKENIZER_MAPPING = LazyMapping(
+                    configuration_auto.CONFIG_MAPPING_NAMES,
+                    tokenization_auto.TOKENIZER_MAPPING_NAMES,
+                )
+                applied = True
+            except Exception:
+                pass
+
+        try:
+            from transformers import AutoTokenizer  # type: ignore
+        except Exception:
+            AutoTokenizer = None
+
+        if AutoTokenizer is not None:
+            try:
+                mapping_obj = getattr(tokenization_auto, "TOKENIZER_MAPPING", None)
+                if mapping_obj is not None:
+                    AutoTokenizer._tokenizer_mapping = mapping_obj  # type: ignore[attr-defined]
+                    applied = True
+            except Exception:
+                pass
+
+    if applied:
+        return
+
+    try:
+        from transformers import AutoConfig, AutoTokenizer  # type: ignore
+    except Exception:
+        return
+
+    if getattr(AutoTokenizer, "_mistral3_tokenizer_patch_applied", False):
+        return
+
+    original_from_pretrained = AutoTokenizer.from_pretrained.__func__  # type: ignore[attr-defined]
+
+    @classmethod
+    def patched_from_pretrained(
+        cls,
+        pretrained_model_name_or_path: Any,
+        *init_inputs: Any,
+        **kwargs: Any,
+    ) -> Any:
+        original_kwargs = dict(kwargs)
+        try:
+            return original_from_pretrained(cls, pretrained_model_name_or_path, *init_inputs, **dict(kwargs))
+        except KeyError as exc:
+            kwargs = original_kwargs
+
+            config = kwargs.get("config")
+            config_type = type(config).__name__ if config is not None else ""
+
+            if config is None:
+                config_kwargs: dict[str, Any] = {}
+                for key in (
+                    "cache_dir",
+                    "force_download",
+                    "local_files_only",
+                    "proxies",
+                    "revision",
+                    "token",
+                    "token_authentication",
+                    "trust_remote_code",
+                    "resume_download",
+                    "subfolder",
+                ):
+                    if key in kwargs:
+                        config_kwargs[key] = kwargs[key]
+                try:
+                    config = AutoConfig.from_pretrained(pretrained_model_name_or_path, **config_kwargs)
+                    config_type = type(config).__name__
+                except Exception:
+                    config = None
+                    config_type = ""
+
+            if "Mistral3Config" not in repr(exc) and config_type != "Mistral3Config":
+                raise
+
+            fallback_kwargs = dict(kwargs)
+            fallback_kwargs.pop("config", None)
+            fallback_kwargs.pop("tokenizer_type", None)
+            use_fast_raw = fallback_kwargs.pop("use_fast", True)
+            use_fast = True if use_fast_raw is None else bool(use_fast_raw)
+
+            order: list[type] = []
+            if use_fast and fast_cls is not None:
+                order.append(fast_cls)
+            if slow_cls is not None and slow_cls not in order:
+                order.append(slow_cls)
+            if not use_fast and fast_cls is not None and fast_cls not in order:
+                order.append(fast_cls)
+
+            last_error: Exception | None = None
+            for tokenizer_cls in order:
+                try:
+                    return tokenizer_cls.from_pretrained(
+                        pretrained_model_name_or_path, *init_inputs, **fallback_kwargs
+                    )
+                except TypeError:
+                    sanitised_kwargs = dict(fallback_kwargs)
+                    sanitised_kwargs.pop("use_fast", None)
+                    try:
+                        return tokenizer_cls.from_pretrained(
+                            pretrained_model_name_or_path, *init_inputs, **sanitised_kwargs
+                        )
+                    except Exception as inner_exc:  # pragma: no cover - defensive
+                        last_error = inner_exc
+                        continue
+                except Exception as inner_exc:  # pragma: no cover - defensive
+                    last_error = inner_exc
+                    continue
+
+            if last_error is not None:
+                raise last_error
+            raise
+
+    AutoTokenizer.from_pretrained = patched_from_pretrained  # type: ignore[assignment]
+    AutoTokenizer._mistral3_tokenizer_patch_applied = True
 
 
 def _patch_mergekit() -> None:
@@ -421,6 +690,21 @@ def _patch_mergekit() -> None:
 
     original_layer_count = ModelConfig.layer_count
 
+    def _describe_model_config(instance: Any) -> str:
+        for attribute in ("name", "model", "path", "local_path"):
+            if hasattr(instance, attribute):
+                try:
+                    value = getattr(instance, attribute)
+                except Exception:
+                    continue
+                if value:
+                    if isinstance(value, str):
+                        normalised = _normalise_override_key(value)
+                        if normalised is not None:
+                            value = normalised
+                    return f"{attribute}={value!r}"
+        return f"ModelConfig(id={id(instance)})"
+
     def patched_layer_count(self: Any) -> int:
         config_obj = getattr(self, "config", None)
         preferred = None
@@ -429,22 +713,37 @@ def _patch_mergekit() -> None:
 
         layer_range = getattr(self, "layer_range", None)
         range_count = _layer_range_length(layer_range, preferred=preferred)
+        override_hint = None
+        if config_obj is not None:
+            for attr_name in ("_name_or_path", "name_or_path"):
+                candidate = getattr(config_obj, attr_name, None)
+                if isinstance(candidate, str):
+                    normalised = _normalise_override_key(candidate)
+                    if normalised is not None and normalised in _LAYER_OVERRIDE_MAP:
+                        override_hint = _LAYER_OVERRIDE_MAP[normalised]
+                        break
         if range_count is not None:
             if config_obj is not None:
                 _set_config_attr(config_obj, _LAYER_OVERRIDE_ATTR, range_count)
                 _set_config_attr(config_obj, "num_hidden_layers", range_count)
-            return range_count
+            final = range_count
+        elif preferred is not None:
+            final = preferred
+        else:
+            final = original_layer_count(self)
 
-        if preferred is not None:
-            return preferred
-
-        return original_layer_count(self)
+        _log_layer_debug(
+            f"{_describe_model_config(self)} layer_range={layer_range!r} "
+            f"preferred={preferred} range_count={range_count} override_hint={override_hint} final={final}"
+        )
+        return final
 
     ModelConfig.layer_count = patched_layer_count
     ModelConfig._mistral3_patch_applied = True
 
 
 def _main() -> None:
+    _patch_transformers_tokenizers()
     _patch_mergekit()
 
 
