@@ -20,6 +20,7 @@ import torch
 from datasets import Dataset, load_dataset
 from huggingface_hub import HfApi, snapshot_download
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, LlamaTokenizer, LlamaTokenizerFast
+from transformers.models.mistral import MistralConfig
 from tqdm.auto import tqdm
 
 LLAMA3_BOS = "<|begin_of_text|>"
@@ -422,6 +423,41 @@ def _ensure_tokenizer_assets(target_dir: Path, cache_dir: Optional[Path]) -> Non
         return
 
 
+def _clone_config(config: AutoConfig) -> AutoConfig:
+    return config.__class__(**config.to_dict())
+
+
+def _normalize_model_config(config: AutoConfig) -> AutoConfig:
+    if config.__class__.__name__ != "Mistral3Config":
+        return config
+
+    text_cfg = getattr(config, "text_config", None)
+    data: Optional[Dict[str, Any]] = None
+    if hasattr(text_cfg, "to_dict"):
+        data = text_cfg.to_dict()  # type: ignore[assignment]
+    elif isinstance(text_cfg, dict):
+        data = dict(text_cfg)
+
+    if not data:
+        return config
+
+    data.setdefault("model_type", "mistral")
+    data.setdefault("architectures", ["MistralForCausalLM"])
+    dtype_value = getattr(config, "torch_dtype", None)
+    if dtype_value is not None and data.get("torch_dtype") is None:
+        data["torch_dtype"] = dtype_value
+    for attr in ("bos_token_id", "eos_token_id", "pad_token_id", "unk_token_id"):
+        value = getattr(config, attr, None)
+        if value is not None and data.get(attr) is None:
+            data[attr] = value
+
+    try:
+        normalized = MistralConfig(**data)
+    except Exception:
+        normalized = AutoConfig.for_model("mistral", **data)
+    return normalized
+
+
 def _ensure_local_model(
     model_id: str,
     cache_dir: Path,
@@ -783,46 +819,61 @@ def main() -> None:
         target = _resolve_model_identifier(model_id, model_cache_dir, ignore_patterns=("*.bin",))
 
         effective_trust_remote_code = bool(args.trust_remote_code)
+        config_cache: Dict[bool, AutoConfig] = {}
+
+        def _get_config(trust_remote_code: bool) -> AutoConfig:
+            key = bool(trust_remote_code)
+            if key not in config_cache:
+                config_cache[key] = AutoConfig.from_pretrained(target, trust_remote_code=trust_remote_code)
+            return config_cache[key]
 
         def _load_tokenizer(trust_remote_code: bool) -> AutoTokenizer:
-            try:
-                return AutoTokenizer.from_pretrained(target, trust_remote_code=trust_remote_code)
-            except KeyError as exc:
-                config = AutoConfig.from_pretrained(target, trust_remote_code=trust_remote_code)
+            base_config = _clone_config(_get_config(trust_remote_code))
+
+            def _apply_tokenizer_fallback(cfg: AutoConfig) -> bool:
                 patched = False
                 desired = {
-                    "tokenizer_class": "LlamaTokenizer",
-                    "tokenizer_class_fast": "LlamaTokenizerFast",
-                    "tokenizer_class_py": "LlamaTokenizer",
+                    "tokenizer_class": LlamaTokenizer.__name__,
+                    "tokenizer_class_fast": LlamaTokenizerFast.__name__,
+                    "tokenizer_class_py": LlamaTokenizer.__name__,
                 }
                 for attr, fallback in desired.items():
                     try:
-                        value = getattr(config, attr)
+                        value = getattr(cfg, attr)
                     except AttributeError:
                         value = None
                     if not value or (isinstance(value, str) and value.lower().startswith("mistral")):
                         try:
-                            setattr(config, attr, fallback)
+                            setattr(cfg, attr, fallback)
                         except Exception:
                             continue
                         patched = True
-                if not patched:
-                    raise exc
-                try:
-                    return AutoTokenizer.from_pretrained(
-                        target,
-                        trust_remote_code=trust_remote_code,
-                        config=config,
-                    )
-                except KeyError:
-                    raise exc
+                return patched
+
+            try:
+                return AutoTokenizer.from_pretrained(
+                    target,
+                    trust_remote_code=trust_remote_code,
+                    config=base_config,
+                )
+            except KeyError as exc:
+                if not _apply_tokenizer_fallback(base_config):
+                    raise
+                return AutoTokenizer.from_pretrained(
+                    target,
+                    trust_remote_code=trust_remote_code,
+                    config=base_config,
+                )
 
         def _load_model(trust_remote_code: bool) -> AutoModelForCausalLM:
+            base_config = _clone_config(_get_config(trust_remote_code))
+            model_config = _normalize_model_config(base_config)
             return AutoModelForCausalLM.from_pretrained(
                 target,
                 torch_dtype=dtype,
                 device_map=device_map,
                 trust_remote_code=trust_remote_code,
+                config=model_config,
             )
 
         try:
@@ -832,6 +883,7 @@ def main() -> None:
                 raise
             print("Tokenizer requires trust_remote_code=True; retrying with remote code enabled.", flush=True)
             effective_trust_remote_code = True
+            config_cache.clear()
             tokenizer = _load_tokenizer(True)
         ensure_pad_token(tokenizer)
 
@@ -842,6 +894,7 @@ def main() -> None:
                 raise
             print("Model config requires trust_remote_code=True; retrying with remote code enabled.", flush=True)
             effective_trust_remote_code = True
+            config_cache.clear()
             tokenizer = _load_tokenizer(True)
             model = _load_model(True)
 
