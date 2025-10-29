@@ -19,7 +19,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 import torch
 from datasets import Dataset, load_dataset
 from huggingface_hub import HfApi, snapshot_download
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, LlamaTokenizer, LlamaTokenizerFast
 from tqdm.auto import tqdm
 
 LLAMA3_BOS = "<|begin_of_text|>"
@@ -31,6 +31,16 @@ BUCKETS = ("all", "confident", "uncertain")
 KIND_KEYS = ("self_attn", "mlp")
 EPS = 1e-8
 DEFAULT_MODEL_CACHE_DIR = "artifacts/model_cache"
+OFFICIAL_TOKENIZER_REPO = "mistralai/Mistral-Small-3.1-24B-Base-2503"
+OFFICIAL_TOKENIZER_FILES = (
+    "tokenizer.model",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+    "tekken.json",
+    "preprocessor_config.json",
+    "processor_config.json",
+)
 
 
 @dataclass
@@ -395,6 +405,23 @@ def _infer_weight_ignore_patterns(repo_id: str, revision: Optional[str]) -> Tupl
     return tuple(extra)
 
 
+def _ensure_tokenizer_assets(target_dir: Path, cache_dir: Optional[Path]) -> None:
+    missing = [name for name in OFFICIAL_TOKENIZER_FILES if not (target_dir / name).exists()]
+    if not missing:
+        return
+
+    try:
+        snapshot_download(
+            repo_id=OFFICIAL_TOKENIZER_REPO,
+            cache_dir=cache_dir,
+            local_dir=target_dir,
+            local_dir_use_symlinks=False,
+            allow_patterns=tuple(missing),
+        )
+    except Exception:
+        return
+
+
 def _ensure_local_model(
     model_id: str,
     cache_dir: Path,
@@ -430,6 +457,8 @@ def _ensure_local_model(
         local_dir_use_symlinks=False,
         ignore_patterns=ignore,
     )
+
+    _ensure_tokenizer_assets(target_dir, cache_dir)
     return target_dir
 
 
@@ -756,7 +785,37 @@ def main() -> None:
         effective_trust_remote_code = bool(args.trust_remote_code)
 
         def _load_tokenizer(trust_remote_code: bool) -> AutoTokenizer:
-            return AutoTokenizer.from_pretrained(target, trust_remote_code=trust_remote_code)
+            try:
+                return AutoTokenizer.from_pretrained(target, trust_remote_code=trust_remote_code)
+            except KeyError as exc:
+                config = AutoConfig.from_pretrained(target, trust_remote_code=trust_remote_code)
+                patched = False
+                desired = {
+                    "tokenizer_class": "LlamaTokenizer",
+                    "tokenizer_class_fast": "LlamaTokenizerFast",
+                    "tokenizer_class_py": "LlamaTokenizer",
+                }
+                for attr, fallback in desired.items():
+                    try:
+                        value = getattr(config, attr)
+                    except AttributeError:
+                        value = None
+                    if not value or (isinstance(value, str) and value.lower().startswith("mistral")):
+                        try:
+                            setattr(config, attr, fallback)
+                        except Exception:
+                            continue
+                        patched = True
+                if not patched:
+                    raise exc
+                try:
+                    return AutoTokenizer.from_pretrained(
+                        target,
+                        trust_remote_code=trust_remote_code,
+                        config=config,
+                    )
+                except KeyError:
+                    raise exc
 
         def _load_model(trust_remote_code: bool) -> AutoModelForCausalLM:
             return AutoModelForCausalLM.from_pretrained(
