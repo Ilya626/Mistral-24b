@@ -434,6 +434,72 @@ def _import_first_available(candidates: Sequence[tuple[str, str]]) -> tuple[type
     return None, None
 
 
+def _patch_sentencepiece_loader() -> None:
+    try:
+        import sentencepiece as spm  # type: ignore
+    except Exception:
+        return
+
+    processor_cls = getattr(spm, "SentencePieceProcessor", None)
+    if processor_cls is None:
+        return
+
+    if getattr(spm, "_mistral_sentencepiece_patch_applied", False):
+        return
+
+    original_load = getattr(processor_cls, "LoadFromFile", None)
+    if not callable(original_load):
+        return
+
+    def patched_load(self: Any, model_file: Any) -> Any:  # type: ignore[override]
+        candidate = model_file
+
+        if isinstance(candidate, (str, bytes)):
+            if isinstance(candidate, bytes):
+                try:
+                    return self.LoadFromSerializedProto(candidate)
+                except Exception:
+                    pass
+            else:
+                return original_load(self, candidate)
+
+        if isinstance(candidate, os.PathLike):
+            try:
+                return original_load(self, os.fspath(candidate))
+            except Exception:
+                pass
+
+        if hasattr(candidate, "read") and callable(candidate.read):
+            try:
+                data = candidate.read()
+            except Exception:
+                data = None
+            if isinstance(data, (bytes, bytearray)):
+                try:
+                    return self.LoadFromSerializedProto(bytes(data))
+                except Exception:
+                    pass
+
+        try:
+            coerced = str(candidate)
+        except Exception:
+            coerced = None
+
+        if isinstance(coerced, str):
+            try:
+                return original_load(self, coerced)
+            except Exception:
+                pass
+
+        raise TypeError("not a string")
+
+    processor_cls.LoadFromFile = patched_load  # type: ignore[assignment]
+    try:
+        setattr(spm, "_mistral_sentencepiece_patch_applied", True)
+    except Exception:
+        pass
+
+
 def _patch_transformers_tokenizers() -> None:
     try:
         from transformers.models.mistral3 import configuration_mistral3  # type: ignore
@@ -743,6 +809,7 @@ def _patch_mergekit() -> None:
 
 
 def _main() -> None:
+    _patch_sentencepiece_loader()
     _patch_transformers_tokenizers()
     _patch_mergekit()
 
