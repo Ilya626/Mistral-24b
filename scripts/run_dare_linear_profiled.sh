@@ -13,6 +13,7 @@ OUT="${OUT:-/workspace/merged_dare_linear_profiled}"
 VISTRAL_DIR="${VISTRAL_DIR:-/workspace/Vistral-24B-Instruct}"
 CYDONIA_DIR="${CYDONIA_DIR:-/workspace/Cydonia-24B-v4.2.0}"
 BASE_MODEL_DIR="${BASE_MODEL_DIR:-/workspace/Mistral-Small-3.2-24B-Instruct-2506}"
+OFFICIAL_TOKENIZER_REPO="${OFFICIAL_TOKENIZER_REPO:-mistralai/Mistral-Small-3.1-24B-Base-2503}"
 
 ensure_path_in_config() {
   local label="$1"
@@ -28,47 +29,38 @@ ensure_path_in_config() {
   fi
 }
 
-check_required_files() {
+require_files() {
   local label="$1"
   local root="$2"
   local repo="$3"
   shift 3
-
   local missing=0
-  local files=($@)
-
-  for rel in "${files[@]}"; do
-    local candidate="${root}/${rel}"
-    if [[ ! -f "${candidate}" ]]; then
-      echo "Ошибка: для ${label} не найден ${rel} (ожидался ${candidate})." >&2
+  for rel in "$@"; do
+    local target="${root}/${rel}"
+    if [[ ! -f "${target}" ]]; then
+      echo "Ошибка: для ${label} не найден ${rel} (ожидался ${target})." >&2
       missing=1
     fi
   done
-
   if (( missing )); then
     echo "Подсказка: повторите загрузку: huggingface-cli download ${repo} --local-dir \"${root}\" --force-download" >&2
     exit 1
   fi
-
-  echo "✓ ${label}: проверка обязательных файлов пройдена."
+  echo "✓ ${label}: обязательные файлы на месте."
 }
 
-check_any_file() {
+require_any_file() {
   local label="$1"
   local root="$2"
   local repo="$3"
   shift 3
-
-  local candidates=($@)
-  for rel in "${candidates[@]}"; do
-    local candidate="${root}/${rel}"
-    if [[ -f "${candidate}" ]]; then
+  for rel in "$@"; do
+    if [[ -f "${root}/${rel}" ]]; then
       echo "✓ ${label}: найден ${rel}."
       return 0
     fi
   done
-
-  echo "Ошибка: для ${label} не найден ни один из файлов: ${candidates[*]} (каталог ${root})." >&2
+  echo "Ошибка: для ${label} не найден ни один из файлов: $* (каталог ${root})." >&2
   echo "Подсказка: повторите загрузку: huggingface-cli download ${repo} --local-dir \"${root}\" --force-download" >&2
   exit 1
 }
@@ -78,35 +70,21 @@ sync_base_tokenizer() {
     return 0
   fi
 
-  local source=""
-  for candidate in "${VISTRAL_DIR}" "${CYDONIA_DIR}"; do
-    if ls "${candidate}"/tokenizer.* >/dev/null 2>&1; then
-      source="${candidate}"
-      break
-    fi
-  done
-
-  if [[ -z "${source}" ]]; then
-    echo "Ошибка: не удалось найти токенайзер ни в одном из источников (Vistral/Cydonia)." >&2
-    echo "Загрузите токенайзер вручную и повторите запуск." >&2
-    exit 1
-  fi
-
-  echo "[!]  Базовая модель без токенайзера. Копирую из ${source}."
+  echo "[!] Базовая модель без токенайзера. Скачиваю из ${OFFICIAL_TOKENIZER_REPO}."
   local files=(
-    tokenizer.model
     tokenizer.json
     tokenizer_config.json
     special_tokens_map.json
-    vocab.json
-    merges.txt
+    tekken.json
+    preprocessor_config.json
+    processor_config.json
   )
   for rel in "${files[@]}"; do
-    local src_path="${source}/${rel}"
-    local dst_path="${BASE_MODEL_DIR}/${rel}"
-    if [[ -f "${src_path}" && ! -f "${dst_path}" ]]; then
-      cp "${src_path}" "${dst_path}"
-    fi
+    huggingface-cli download "${OFFICIAL_TOKENIZER_REPO}" \
+      --local-dir "${BASE_MODEL_DIR}" \
+      --include "${rel}" \
+      --force-download \
+      --local-dir-use-symlinks False >/dev/null
   done
 }
 
@@ -241,17 +219,17 @@ huggingface-cli download mistralai/Mistral-Small-3.2-24B-Instruct-2506 \
 
 sync_base_tokenizer
 
-check_required_files "Vistral" "${VISTRAL_DIR}" "Vikhrmodels/Vistral-24B-Instruct" \
+require_files "Vistral" "${VISTRAL_DIR}" "Vikhrmodels/Vistral-24B-Instruct" \
   "config.json"
-check_any_file "Vistral" "${VISTRAL_DIR}" "Vikhrmodels/Vistral-24B-Instruct" \
+require_any_file "Vistral" "${VISTRAL_DIR}" "Vikhrmodels/Vistral-24B-Instruct" \
   "tokenizer.model" "tokenizer.json"
-check_required_files "Cydonia" "${CYDONIA_DIR}" "TheDrummer/Cydonia-24B-v4.2.0" \
+require_files "Cydonia" "${CYDONIA_DIR}" "TheDrummer/Cydonia-24B-v4.2.0" \
   "config.json"
-check_any_file "Cydonia" "${CYDONIA_DIR}" "TheDrummer/Cydonia-24B-v4.2.0" \
+require_any_file "Cydonia" "${CYDONIA_DIR}" "TheDrummer/Cydonia-24B-v4.2.0" \
   "tokenizer.model" "tokenizer.json"
-check_required_files "базовой модели" "${BASE_MODEL_DIR}" "mistralai/Mistral-Small-3.2-24B-Instruct-2506" \
+require_files "базовой модели" "${BASE_MODEL_DIR}" "mistralai/Mistral-Small-3.2-24B-Instruct-2506" \
   "config.json"
-check_any_file "базовой модели" "${BASE_MODEL_DIR}" "mistralai/Mistral-Small-3.2-24B-Instruct-2506" \
+require_any_file "базовой модели" "${BASE_MODEL_DIR}" "mistralai/Mistral-Small-3.2-24B-Instruct-2506" \
   "tokenizer.model" "tokenizer.json"
 
 echo ">>> Запускаю mergekit (dare_linear + профили)..."
@@ -260,8 +238,3 @@ mergekit-yaml "${CFG}" "${OUT}" \
 
 echo "--- Готово ---"
 echo "Результат сохранён в: ${OUT}"
-
-
-
-
-

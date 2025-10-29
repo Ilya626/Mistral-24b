@@ -969,6 +969,10 @@ def _patch_mergekit() -> None:
     except Exception:
         mk_embed = None
 
+    try:
+        from mergekit.tokenizer import build as mk_build  # type: ignore
+    except Exception:
+        mk_build = None
     if mk_embed is not None and not getattr(mk_embed.PermutedEmbeddings, "_mistral_perm_patch", False):
         original_permuted_execute = mk_embed.PermutedEmbeddings.execute
 
@@ -1008,6 +1012,43 @@ def _patch_mergekit() -> None:
         mk_embed.PermutedEmbeddings.execute = patched_permuted_execute  # type: ignore[assignment]
         try:
             setattr(mk_embed.PermutedEmbeddings, "_mistral_perm_patch", True)
+        except Exception:
+            pass
+
+    if mk_build is not None and not getattr(mk_build, "_mistral_vocab_patch", False):
+        original_get_vocab_size = mk_build.get_vocab_size
+
+        def patched_get_vocab_size(model_path: Any, trust_remote_code: bool) -> int | None:
+            value = original_get_vocab_size(model_path, trust_remote_code)
+            if value is not None:
+                return value
+
+            try:
+                from transformers import AutoConfig  # type: ignore
+            except Exception:
+                return None
+
+            try:
+                cfg = AutoConfig.from_pretrained(
+                    model_path.path,
+                    revision=model_path.revision,
+                    trust_remote_code=trust_remote_code,
+                )
+            except Exception:
+                return None
+
+            fallback = _ensure_vocab_size_attribute(cfg)
+            if fallback is not None:
+                return fallback
+
+            text_cfg = getattr(cfg, "text_config", None)
+            if text_cfg is not None:
+                return _ensure_vocab_size_attribute(text_cfg)
+            return None
+
+        mk_build.get_vocab_size = patched_get_vocab_size  # type: ignore[assignment]
+        try:
+            setattr(mk_build, "_mistral_vocab_patch", True)
         except Exception:
             pass
 
@@ -1083,6 +1124,8 @@ def _main() -> None:
 
 
 _main()
+
+
 
 
 
