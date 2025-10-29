@@ -490,6 +490,15 @@ def _patch_sentencepiece_loader() -> None:
                 except Exception:
                     return None
 
+            fspath = getattr(candidate, "__fspath__", None)
+            if callable(fspath):
+                try:
+                    resolved = fspath()
+                except Exception:
+                    resolved = None
+                if isinstance(resolved, (str, bytes, bytearray, os.PathLike)):
+                    return _attempt_load(resolved)
+
             if isinstance(candidate, (bytes, bytearray, memoryview)):
                 return _load_from_bytes(candidate)
 
@@ -540,11 +549,12 @@ def _patch_sentencepiece_loader() -> None:
                 as_str = None
 
             if isinstance(as_str, str) and as_str:
-                if os.path.exists(as_str):
-                    try:
-                        return original_load(self, as_str)
-                    except Exception:
-                        return None
+                try:
+                    return original_load(self, as_str)
+                except TypeError:
+                    pass
+                except Exception:
+                    raise
 
             return None
 
