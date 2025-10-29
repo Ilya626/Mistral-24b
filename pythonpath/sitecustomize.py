@@ -1,4 +1,4 @@
-"""Runtime patches for external tools.
+﻿"""Runtime patches for external tools.
 
 This module is automatically imported by Python when present on the
 PYTHONPATH.  We use it to patch mergekit so that it recognises the
@@ -177,7 +177,7 @@ def _coerce_layer_count(value: Any) -> int | None:
     # ``Mistral3Config`` exposes ``num_layers`` as either a scalar, a
     # mapping, or a sequence depending on the code path that constructed the
     # config object.  For mappings we look for any positive integer values and
-    # use the maximum – this matches how mergekit interprets layer ranges.  For
+    # use the maximum вЂ“ this matches how mergekit interprets layer ranges.  For
     # sequences we fall back to their length, but also attempt to coerce the
     # individual members in case the sequence simply wraps a single numeric
     # entry (e.g. ``[40]``).
@@ -577,7 +577,17 @@ def _patch_sentencepiece_loader() -> None:
         if result is not None:
             return result
 
-        raise TypeError("not a string")
+        fallback = model_file
+        try:
+            fallback = os.fspath(model_file)  # type: ignore[arg-type]
+        except Exception:
+            pass
+
+        try:
+            return original_load(self, fallback)
+        except TypeError:
+            raise TypeError("not a string")
+
 
     processor_cls.LoadFromFile = patched_load  # type: ignore[assignment]
     try:
@@ -954,3 +964,4 @@ def _main() -> None:
 
 
 _main()
+
