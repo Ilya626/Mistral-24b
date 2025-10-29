@@ -1,1 +1,3 @@
 artifacts/
+# Local environment secrets
+hf_keys.sh

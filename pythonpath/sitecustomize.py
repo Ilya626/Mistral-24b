@@ -86,7 +86,11 @@ def _normalise_override_key(value: str | None) -> str | None:
 
 _LAYER_OVERRIDE_MAP: dict[str, int] = {}
 _override_spec = os.environ.get("MISTRAL_LAYER_RANGE_OVERRIDES", "")
-for raw_entry in _override_spec.split(":"):
+if ";" in _override_spec and os.pathsep != ";":
+    _override_entries = _override_spec.split(";")
+else:
+    _override_entries = _override_spec.split(":") if _override_spec else []
+for raw_entry in _override_entries:
     entry = raw_entry.strip()
     if not entry:
         continue
@@ -769,11 +773,64 @@ def _patch_transformers_tokenizers() -> None:
     AutoTokenizer._mistral3_tokenizer_patch_applied = True
 
 
+
+
+def _patch_mergekit_loadtensor() -> None:
+    try:
+        from mergekit.io import tasks as mk_tasks  # type: ignore
+    except Exception:
+        return
+
+    if getattr(mk_tasks.LoadTensor, "_mistral_resolve_patch_applied", False):
+        return
+
+    original_resolve = mk_tasks.LoadTensor._resolve_name
+
+    def patched_resolve(self: Any, loader: Any) -> Any:
+        name = original_resolve(self, loader)
+        if name:
+            return name
+
+        tensor_name = getattr(self, "tensor", None)
+        if not isinstance(tensor_name, str) or not tensor_name:
+            return name
+
+        candidate_names: list[str] = []
+        candidate_names.append(f"language_model.{tensor_name}")
+        if tensor_name.startswith("model."):
+            candidate_names.append(f"language_model.{tensor_name}")
+            candidate_names.append(f"language_model.model.{tensor_name}")
+        else:
+            candidate_names.append(f"language_model.model.{tensor_name}")
+
+        seen: set[str] = set()
+        ordered_candidates: list[str] = []
+        for candidate in candidate_names:
+            if candidate and candidate not in seen:
+                seen.add(candidate)
+                ordered_candidates.append(candidate)
+
+        tensor_paths = getattr(getattr(loader, "index", None), "tensor_paths", None)
+        if isinstance(tensor_paths, dict):
+            for candidate in ordered_candidates:
+                if candidate in tensor_paths:
+                    return candidate
+
+        return name
+
+    mk_tasks.LoadTensor._resolve_name = patched_resolve  # type: ignore[assignment]
+    try:
+        setattr(mk_tasks.LoadTensor, "_mistral_resolve_patch_applied", True)
+    except Exception:
+        pass
+
 def _patch_mergekit() -> None:
     try:
         from mergekit import architecture  # type: ignore
     except Exception:  # pragma: no cover - mergekit may not be installed locally
         return
+
+    _patch_mergekit_loadtensor()
 
     if getattr(architecture, "_mistral3_patch_applied", False):
         return
